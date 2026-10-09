@@ -24,12 +24,6 @@ class Settings(BaseSettings):
         description="PostgreSQL 异步连接字符串"
     )
     
-    # Redis 配置
-    REDIS_URL: str = Field(
-        default="redis://localhost:6379/0",
-        description="Redis 连接字符串"
-    )
-    
     # MinIO 配置
     MINIO_ENDPOINT: str = Field(default="localhost:9000")
     MINIO_ACCESS_KEY: str = Field(default="minioadmin")

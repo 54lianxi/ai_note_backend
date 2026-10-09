@@ -6,7 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.api.router import api_router
 from app.infrastructure.database import init_db, close_db
-from app.infrastructure.redis_client import close_redis
 # 导入所有 ORM 模型，确保 create_all 能发现全部表
 import app.models  # noqa: F401
 
@@ -19,7 +18,6 @@ async def lifespan(app: FastAPI):
     yield
     # 关闭时
     await close_db()
-    await close_redis()
 
 
 app = FastAPI(
