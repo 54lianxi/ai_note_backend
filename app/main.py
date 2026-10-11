@@ -16,6 +16,11 @@ import app.models  # noqa: F401
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _static_page(filename: str) -> FileResponse:
+    """返回 static 目录下的 HTML 页面。"""
+    return FileResponse(STATIC_DIR / filename, media_type="text/html")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -52,11 +57,26 @@ async def health_check():
     return {"status": "ok", "version": settings.APP_VERSION}
 
 
+@app.get("/", include_in_schema=False)
+@app.get("/home", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+async def home_page() -> FileResponse:
+    """应用首页，供 Google OAuth 验证等场景展示产品用途。"""
+    return _static_page("index.html")
+
+
 @app.get("/privacy", include_in_schema=False)
 @app.get("/privacy.html", include_in_schema=False)
 async def privacy_policy() -> FileResponse:
     """隐私政策页面，供 App 内跳转和应用商店审核使用。"""
-    return FileResponse(STATIC_DIR / "privacy.html", media_type="text/html")
+    return _static_page("privacy.html")
+
+
+@app.get("/terms", include_in_schema=False)
+@app.get("/terms.html", include_in_schema=False)
+async def terms_of_service() -> FileResponse:
+    """服务条款页面。"""
+    return _static_page("terms.html")
 
 
 if __name__ == "__main__":
