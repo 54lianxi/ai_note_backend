@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="index,follow">
-<meta name="description" content="WhimNote is an AI-powered multimodal note-taking app that captures voice, text, photos and documents, transcribes and summarizes them, and lets you search and chat with everything you save.">
-<title>WhimNote — AI-powered multimodal notes</title>
+<meta name="description" content="WhimNote is an AI-powered multimodal note-taking app. It captures voice, text, photos and documents, transcribes and summarizes them, and lets you search and chat with everything you save. Sign in with Apple or Google.">
+<title>WhimNote — AI-powered multimodal note-taking app</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128221;</text></svg>">
 <style>
   :root {
@@ -24,13 +24,10 @@
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--body);
+    margin: 0; background: var(--bg); color: var(--body);
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
       "Helvetica Neue", Arial, sans-serif;
-    font-size: 16px;
-    line-height: 1.65;
+    font-size: 16px; line-height: 1.65;
   }
   h1, h2, h3 { color: var(--ink); line-height: 1.2; margin: 0; }
   a { color: var(--brand); text-decoration: none; }
@@ -38,21 +35,13 @@
   p { margin: 0 0 14px; }
   .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
 
-  /* Nav */
   header.nav {
-    position: sticky;
-    top: 0;
-    z-index: 20;
+    position: sticky; top: 0; z-index: 20;
     background: rgba(255,255,255,.85);
     backdrop-filter: saturate(180%) blur(12px);
     border-bottom: 1px solid var(--line);
   }
-  .nav-inner {
-    display: flex;
-    align-items: center;
-    gap: 24px;
-    height: 64px;
-  }
+  .nav-inner { display: flex; align-items: center; gap: 24px; height: 64px; }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; color: var(--ink); font-size: 19px; }
   .brand:hover { text-decoration: none; }
   .logo {
@@ -62,43 +51,28 @@
   }
   .nav-links { margin-left: auto; display: flex; align-items: center; gap: 22px; }
   .nav-links a { color: var(--body); font-size: 15px; font-weight: 500; }
-  @media (max-width: 720px) { .nav-links .hide-sm { display: none; } }
+  @media (max-width: 760px) { .nav-links .hide-sm { display: none; } }
 
-  /* Hero */
   .hero { padding: 72px 0 40px; }
-  .hero-grid {
-    display: grid;
-    grid-template-columns: 1.05fr .95fr;
-    gap: 48px;
-    align-items: center;
-  }
+  .hero-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 48px; align-items: center; }
   @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; gap: 32px; } .hero { padding-top: 48px; } }
   .pill {
     display: inline-flex; align-items: center; gap: 8px;
     background: var(--brand-soft); color: var(--brand-dark);
-    border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 600;
-    margin-bottom: 18px;
+    border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 600; margin-bottom: 18px;
   }
   .hero h1 { font-size: 42px; letter-spacing: -0.5px; margin-bottom: 16px; }
   .hero .lead { font-size: 18px; color: var(--body); margin-bottom: 24px; }
   @media (max-width: 520px) { .hero h1 { font-size: 32px; } }
   .cta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-  .btn {
-    display: inline-block; border-radius: 12px; padding: 13px 22px;
-    font-weight: 600; font-size: 15px;
-  }
+  .btn { display: inline-block; border-radius: 12px; padding: 13px 22px; font-weight: 600; font-size: 15px; }
   .btn:hover { text-decoration: none; }
   .btn-primary { background: var(--brand); color: #fff; }
   .btn-primary:hover { background: var(--brand-dark); }
   .btn-ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); }
   .microcopy { font-size: 13px; color: var(--muted); margin-top: 14px; }
 
-  /* Phone mock */
-  .phone {
-    width: 288px; margin: 0 auto;
-    background: #0b1020; border-radius: 34px; padding: 12px;
-    box-shadow: 0 30px 60px -20px rgba(15,23,42,.45);
-  }
+  .phone { width: 288px; margin: 0 auto; background: #0b1020; border-radius: 34px; padding: 12px; box-shadow: 0 30px 60px -20px rgba(15,23,42,.45); }
   .screen { background: #fff; border-radius: 24px; padding: 16px; min-height: 420px; }
   .screen-top { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); }
   .rec-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 14px; }
@@ -110,25 +84,17 @@
   .msg.user { background: var(--brand); color: #fff; margin-left: 34px; }
   .msg.ai { background: var(--card); border: 1px solid var(--line); margin-right: 34px; }
 
-  /* Sections */
   section { padding: 40px 0; }
   .kicker { color: var(--brand); font-weight: 700; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 10px; }
   h2.section-title { font-size: 28px; margin-bottom: 12px; letter-spacing: -0.3px; }
-  .section-sub { font-size: 17px; color: var(--body); max-width: 720px; margin-bottom: 26px; }
+  .section-sub { font-size: 17px; color: var(--body); max-width: 780px; margin-bottom: 26px; }
   .band { background: var(--card); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 
   .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
   @media (max-width: 860px) { .features { grid-template-columns: repeat(2, 1fr); } }
   @media (max-width: 560px) { .features { grid-template-columns: 1fr; } }
-  .card {
-    background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
-    padding: 20px;
-  }
-  .band .card { background: #fff; }
-  .card .ico {
-    width: 40px; height: 40px; border-radius: 11px; background: var(--brand-soft);
-    display: grid; place-items: center; font-size: 20px; margin-bottom: 12px;
-  }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
+  .card .ico { width: 40px; height: 40px; border-radius: 11px; background: var(--brand-soft); display: grid; place-items: center; font-size: 20px; margin-bottom: 12px; }
   .card h3 { font-size: 16px; margin-bottom: 6px; }
   .card p { font-size: 14px; margin: 0; color: var(--body); }
 
@@ -136,20 +102,18 @@
   @media (max-width: 780px) { .two-col { grid-template-columns: 1fr; gap: 20px; } }
   ul.checks { list-style: none; padding: 0; margin: 0; }
   ul.checks li { position: relative; padding-left: 28px; margin-bottom: 10px; }
-  ul.checks li::before {
-    content: "✓"; position: absolute; left: 0; top: 0;
-    color: #12a150; font-weight: 800;
-  }
-  .note {
-    background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--brand);
-    border-radius: 12px; padding: 16px 18px; font-size: 14px;
-  }
+  ul.checks li::before { content: "\2713"; position: absolute; left: 0; top: 0; color: #12a150; font-weight: 800; }
+  .note { background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--brand); border-radius: 12px; padding: 16px 18px; font-size: 14px; }
 
-  /* CTA / contact */
-  .cta-card {
-    background: linear-gradient(135deg, #1e2a78, var(--brand));
-    color: #fff; border-radius: 20px; padding: 40px; text-align: center;
+  .steps { list-style: none; padding: 0; margin: 0; counter-reset: s; }
+  .steps li { position: relative; padding-left: 42px; margin-bottom: 14px; }
+  .steps li::before {
+    counter-increment: s; content: counter(s);
+    position: absolute; left: 0; top: 0; width: 28px; height: 28px; border-radius: 50%;
+    background: var(--brand-soft); color: var(--brand-dark); font-weight: 700; font-size: 14px;
+    display: grid; place-items: center;
   }
+  .cta-card { background: linear-gradient(135deg, #1e2a78, var(--brand)); color: #fff; border-radius: 20px; padding: 40px; text-align: center; }
   .cta-card h2 { color: #fff; font-size: 26px; margin-bottom: 10px; }
   .cta-card p { color: #dfe6ff; max-width: 620px; margin: 0 auto 22px; }
   .cta-card .btn-ghost { border-color: rgba(255,255,255,.5); background: rgba(255,255,255,.12); color: #fff; }
@@ -159,20 +123,19 @@
   .foot-inner { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; }
   .foot-inner nav { display: flex; gap: 20px; flex-wrap: wrap; }
   .foot-inner a { color: var(--body); font-size: 14px; }
-  .copy { color: var(--muted); font-size: 13px; }
+  .copy { color: var(--muted); font-size: 13px; line-height: 1.6; }
 </style>
 </head>
 <body>
 
 <header class="nav">
   <div class="wrap nav-inner">
-    <a class="brand" href="/">
-      <span class="logo">✎</span> WhimNote
-    </a>
+    <a class="brand" href="/"><span class="logo">&#9998;</span> WhimNote</a>
     <nav class="nav-links">
+      <a class="hide-sm" href="#purpose">Purpose</a>
       <a class="hide-sm" href="#features">Features</a>
       <a class="hide-sm" href="#data">Data &amp; Privacy</a>
-      <a class="hide-sm" href="#contact">Contact</a>
+      <a class="hide-sm" href="#compliance">Compliance</a>
       <a href="/privacy">Privacy Policy</a>
     </nav>
   </div>
@@ -182,18 +145,21 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div>
-        <span class="pill">AI-powered multimodal notes</span>
-        <h1>Capture anything. Remember everything.</h1>
+        <span class="pill">AI-powered multimodal note-taking app</span>
+        <h1>WhimNote</h1>
         <p class="lead">
           WhimNote turns fleeting thoughts, voice memos, photos and documents
           into organized, searchable knowledge. Record, transcribe, summarize
           and then just ask your notes — in one simple app.
         </p>
         <div class="cta-row">
-          <a class="btn btn-primary" href="#features">See what it does</a>
+          <a class="btn btn-primary" href="#purpose">What WhimNote is for</a>
           <a class="btn btn-ghost" href="/privacy">Read our Privacy Policy</a>
         </div>
-        <p class="microcopy">Available on iOS and Android. Sign in with Apple or Google.</p>
+        <p class="microcopy">
+          No account is required to read this page. WhimNote is available on iOS
+          and Android, and you can sign in with Apple or Google.
+        </p>
       </div>
 
       <div class="phone" aria-hidden="true">
@@ -216,59 +182,54 @@
     </div>
   </section>
 
-  <section class="band" id="about">
+  <section class="band" id="purpose">
     <div class="wrap">
-      <div class="kicker">What is WhimNote</div>
-      <h2 class="section-title">One place for every idea you capture</h2>
+      <div class="kicker">Purpose of the application</div>
+      <h2 class="section-title">What WhimNote does and why</h2>
       <p class="section-sub">
-        WhimNote is an AI-powered multimodal note-taking application. It lets
-        you capture information as text, voice recordings, photos, screenshots
-        and documents, then automatically transcribes audio, extracts key
-        information from images, writes concise summaries, and organizes
-        everything into a searchable personal knowledge base. A built-in AI
-        assistant answers your questions using only the notes and recordings
-        you have chosen to save.
+        <strong>WhimNote is a personal note-taking application that uses AI to
+        help people capture and organize information.</strong> Its purpose is to
+        let you save anything you want to remember as text, a voice recording,
+        a photo or a document, then automatically make it useful and easy to
+        find again. Specifically, WhimNote is used to:
       </p>
-    </div>
-  </section>
-
-  <section id="features">
-    <div class="wrap">
-      <div class="kicker">Features</div>
-      <h2 class="section-title">Built for the way you think</h2>
-      <p class="section-sub">Everything you save becomes easy to find, understand and reuse.</p>
       <div class="features">
         <div class="card">
-          <div class="ico">🎙️</div>
-          <h3>Voice notes with transcription</h3>
-          <p>Record meetings, ideas or reminders and get accurate text transcripts, even while you are still speaking.</p>
+          <div class="ico">&#127897;&#65039;</div>
+          <h3>Record &amp; transcribe</h3>
+          <p>Capture voice notes, meetings and ideas and turn them into accurate text transcripts.</p>
         </div>
         <div class="card">
-          <div class="ico">📝</div>
-          <h3>Automatic summaries</h3>
-          <p>Long recordings and text are condensed into short, clear summaries so you can review in seconds.</p>
+          <div class="ico">&#128221;</div>
+          <h3>Summarize</h3>
+          <p>Condense long recordings and text into short summaries you can review in seconds.</p>
         </div>
         <div class="card">
-          <div class="ico">📷</div>
-          <h3>Photo &amp; document capture</h3>
-          <p>Snap a whiteboard, receipt or page and WhimNote extracts the important details from the image.</p>
+          <div class="ico">&#128247;</div>
+          <h3>Capture images &amp; documents</h3>
+          <p>Snap a whiteboard, receipt or page and extract the important details from it.</p>
         </div>
         <div class="card">
-          <div class="ico">💬</div>
+          <div class="ico">&#128172;</div>
           <h3>Ask your notes</h3>
-          <p>Chat with your own knowledge base and get answers grounded in the content you have saved.</p>
+          <p>Chat with your own saved content and get answers grounded in what you stored.</p>
         </div>
         <div class="card">
-          <div class="ico">🔎</div>
+          <div class="ico">&#128269;</div>
           <h3>Semantic search</h3>
           <p>Search by meaning, not just keywords, to resurface the right note from months ago.</p>
         </div>
         <div class="card">
-          <div class="ico">☁️</div>
-          <h3>Synced &amp; organized</h3>
-          <p>Your notes stay organized and available across your devices, and you can delete them at any time.</p>
+          <div class="ico">&#9729;&#65039;</div>
+          <h3>Organize &amp; sync</h3>
+          <p>Keep your notes organized and available across your devices, and delete them anytime.</p>
         </div>
       </div>
+      <p style="margin-top:24px">
+        WhimNote is a general-purpose productivity tool for note-taking and
+        personal knowledge management. It is intended for users to store and
+        revisit <em>their own</em> notes and recordings.
+      </p>
     </div>
   </section>
 
@@ -278,25 +239,71 @@
         <div class="kicker">Google user data</div>
         <h2 class="section-title">How WhimNote uses your Google data</h2>
         <p>
-          When you choose “Sign in with Google”, WhimNote requests only the
-          basic profile information needed to create and secure your account —
-          your <strong>name, email address and profile picture</strong>. We use
-          it solely to identify you and let you sign in.
+          If you choose “Sign in with Google”, WhimNote requests only the basic
+          profile information needed to create and secure your account — your
+          <strong>name, email address and profile picture</strong>. We use it
+          solely to identify you and let you sign in.
         </p>
         <ul class="checks">
-          <li>We do <strong>not</strong> access Gmail, Google Drive, Calendar or any other Google Workspace data.</li>
-          <li>We do <strong>not</strong> sell your Google user data or share it for advertising.</li>
-          <li>Google user data is <strong>never</strong> used to develop, improve or train generalized AI or ML models.</li>
-          <li>You can revoke access at any time and request deletion of your data.</li>
+          <li>We do <strong>not</strong> access Gmail, Google Drive, Google Calendar, Google Photos or any other Google Workspace data.</li>
+          <li>We do <strong>not</strong> sell your Google user data or share it for advertising or profiling.</li>
+          <li>We do <strong>not</strong> use Google user data to train, develop or improve generalized AI or ML models.</li>
+          <li>Only the account data listed in our Privacy Policy is collected, and you can request its deletion at any time.</li>
         </ul>
       </div>
       <div>
         <div class="note">
-          <p style="margin-bottom:10px"><strong>Transparency first.</strong> Our Privacy Policy explains exactly what we collect, how it is used, how long it is kept, and the rights you have over your data.</p>
+          <p style="margin-bottom:10px"><strong>Transparency first.</strong> Our Privacy Policy explains exactly what data we collect, why we collect it, who we share it with, how long we keep it, and the rights you have over your data.</p>
           <p style="margin:0">
             <a href="/privacy">Read the Privacy Policy</a> &nbsp;·&nbsp;
             <a href="/terms">Terms of Service</a>
           </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="compliance">
+    <div class="wrap">
+      <div class="kicker">Compliance</div>
+      <h2 class="section-title">Our commitment to safe, compliant use of Google APIs</h2>
+      <p class="section-sub">
+        WhimNote accesses Google user data only through Google Sign-In, for the
+        limited purpose of authenticating you and creating your account.
+      </p>
+      <ul class="checks" style="max-width:820px">
+        <li>WhimNote’s use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including the <strong>Limited Use</strong> requirements.</li>
+        <li>WhimNote uses Google APIs only for the purposes described above, and never for advertising, resale, or building user profiles.</li>
+        <li>WhimNote <strong>does not</strong> use Google APIs, and does not allow its users to use the app, to create, generate, request, promote or facilitate <strong>AI-generated non-consensual intimate imagery (AI NCII)</strong>, deepfakes, or any other content that violates the Google APIs Terms of Service or applicable law.</li>
+        <li>Content that is unlawful, deceptive, or that violates the rights of others is not permitted and will be removed; accounts that violate these rules may be terminated.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="band" id="data-control">
+    <div class="wrap two-col">
+      <div>
+        <div class="kicker">Your data, your control</div>
+        <h2 class="section-title">Access or delete your data at any time</h2>
+        <p>
+          You own the notes you create. You can review, export or delete your
+          content inside the app, and you can ask us to delete your account and
+          the personal data associated with it.
+        </p>
+        <ol class="steps">
+          <li>Open WhimNote and go to your account/profile, then delete individual notes, or use “Delete account”.</li>
+          <li>Or email us at <a href="mailto:support@whimnote.app">support@whimnote.app</a> with your request.</li>
+          <li>You may also revoke WhimNote’s access to your Google account at any time in your Google Account permissions.</li>
+        </ol>
+      </div>
+      <div>
+        <div class="note">
+          <p style="margin-bottom:10px"><strong>Data we collect at a glance:</strong></p>
+          <ul class="checks" style="font-size:14px;margin:0">
+            <li>Account info (name, email) via Apple/Google sign-in</li>
+            <li>Notes, recordings, transcripts, images and files you create</li>
+            <li>Basic device and log data needed to run the service</li>
+          </ul>
         </div>
       </div>
     </div>
@@ -308,7 +315,7 @@
         <h2>Questions or data requests?</h2>
         <p>We are happy to help with anything about the app, your account, or your personal data.</p>
         <div class="cta-row" style="justify-content:center">
-          <a class="btn btn-ghost" href="mailto:54kuliqi@gmail.com">Contact 54kuliqi@gmail.com</a>
+          <a class="btn btn-ghost" href="mailto:support@whimnote.app">Contact support@whimnote.app</a>
         </div>
       </div>
     </div>
@@ -317,12 +324,15 @@
 
 <footer class="foot">
   <div class="wrap foot-inner">
-    <span class="copy">© 2026 WhimNote. All rights reserved.</span>
+    <span class="copy">
+      &copy; 2026 WhimNote. All rights reserved.<br>
+      WhimNote — AI-powered multimodal note-taking app. Android package: com.lx.note
+    </span>
     <nav>
       <a href="/">Home</a>
       <a href="/privacy">Privacy Policy</a>
       <a href="/terms">Terms of Service</a>
-      <a href="mailto:54kuliqi@gmail.com">Contact</a>
+      <a href="mailto:support@whimnote.app">Contact</a>
     </nav>
   </div>
 </footer>
