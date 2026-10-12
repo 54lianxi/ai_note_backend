@@ -17,6 +17,8 @@ class User(Base):
     )
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
+    # Google/Apple 登录带回来的邮箱，没拿到时为空。
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # 统一以 UTC 存储（TIMESTAMPTZ），前端按用户本地时区展示。
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

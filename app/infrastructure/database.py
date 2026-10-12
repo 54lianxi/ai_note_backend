@@ -77,6 +77,10 @@ async def init_db():
             "UPDATE messages SET related_record_ids = '[]'::jsonb "
             "WHERE related_record_ids IS NULL"
         ))
+        # users 表补第三方登录邮箱，兼容旧库。
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)"
+        ))
         # 统一时间存储：历史列是 TIMESTAMP（无时区），按 UTC 解释后转成 TIMESTAMPTZ。
         # 只处理当前仍为 naive 的列，避免重复转换造成时区偏移。
         legacy_columns = (await conn.execute(text(

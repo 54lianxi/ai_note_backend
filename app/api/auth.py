@@ -137,6 +137,7 @@ async def sign_in_with_apple(
     if not apple_sub:
         raise HTTPException(status_code=401, detail="Apple identity token 缺少用户标识")
 
+    email = data.email or payload.get("email")
     user_id = _apple_user_id(str(apple_sub))
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -146,9 +147,13 @@ async def sign_in_with_apple(
             id=user_id,
             username=_apple_username(str(apple_sub)),
             hashed_password="apple-sign-in",
+            email=email,
         )
         db.add(user)
         await db.flush()
+    elif email and user.email != email:
+        # Apple 只在首次授权返回邮箱，之后要沿用库里存的值。
+        user.email = email
 
     access_token = create_access_token({"sub": str(user.id)})
     return AuthResponse(
@@ -156,7 +161,7 @@ async def sign_in_with_apple(
         user=AuthUserResponse(
             id=user.id,
             username=user.username,
-            email=data.email or payload.get("email"),
+            email=user.email,
         ),
     )
 
@@ -169,6 +174,7 @@ async def sign_in_with_google(
     """使用 Google identity token 登录或创建本地用户"""
     payload = await GoogleIdentityVerifier().verify(data.identity_token)
     google_sub = str(payload["sub"])
+    email = payload.get("email")
     user_id = _google_user_id(google_sub)
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -178,9 +184,12 @@ async def sign_in_with_google(
             id=user_id,
             username=_google_username(google_sub),
             hashed_password="google-sign-in",
+            email=email,
         )
         db.add(user)
         await db.flush()
+    elif email and user.email != email:
+        user.email = email
 
     access_token = create_access_token({"sub": str(user.id)})
     return AuthResponse(
@@ -188,6 +197,6 @@ async def sign_in_with_google(
         user=AuthUserResponse(
             id=user.id,
             username=user.username,
-            email=payload.get("email"),
+            email=user.email,
         ),
     )

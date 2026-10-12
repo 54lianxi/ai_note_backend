@@ -46,6 +46,15 @@ def test_google_username_fits_existing_column():
     assert len(username) <= 50
 
 
+def test_user_model_stores_login_email():
+    from app.models.user import User
+
+    column = User.__table__.columns["email"]
+
+    assert column.nullable is True
+    assert column.type.length == 255
+
+
 def test_access_token_contains_user_subject():
     user_id = str(_apple_user_id("001234.abcdef"))
 
