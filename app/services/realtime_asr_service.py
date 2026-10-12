@@ -62,6 +62,8 @@ class RealtimeASRService:
             upstream_url,
             max_size=None,
             ping_interval=20,
+            # 上行是 base64 的小包，压缩只会加 CPU 和延迟。
+            compression=None,
             proxy=settings.ASR_REALTIME_PROXY or None,
         ) as upstream:
             await upstream.send(json.dumps({

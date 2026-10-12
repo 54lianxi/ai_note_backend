@@ -51,29 +51,29 @@ app.add_middleware(
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health_check():
     """健康检查"""
     return {"status": "ok", "version": settings.APP_VERSION}
 
 
-@app.get("/", include_in_schema=False)
-@app.get("/home", include_in_schema=False)
-@app.get("/index.html", include_in_schema=False)
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/home", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/index.html", methods=["GET", "HEAD"], include_in_schema=False)
 async def home_page() -> FileResponse:
     """应用首页，供 Google OAuth 验证等场景展示产品用途。"""
     return _static_page("index.html")
 
 
-@app.get("/privacy", include_in_schema=False)
-@app.get("/privacy.html", include_in_schema=False)
+@app.api_route("/privacy", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/privacy.html", methods=["GET", "HEAD"], include_in_schema=False)
 async def privacy_policy() -> FileResponse:
     """隐私政策页面，供 App 内跳转和应用商店审核使用。"""
     return _static_page("privacy.html")
 
 
-@app.get("/terms", include_in_schema=False)
-@app.get("/terms.html", include_in_schema=False)
+@app.api_route("/terms", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/terms.html", methods=["GET", "HEAD"], include_in_schema=False)
 async def terms_of_service() -> FileResponse:
     """服务条款页面。"""
     return _static_page("terms.html")
