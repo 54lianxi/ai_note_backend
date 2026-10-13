@@ -20,9 +20,8 @@ from app.schemas.record import (
     RecordResponse,
     RecordUpdate,
     TextRecordCreate,
-    VoiceTranscriptionResponse,
 )
-from app.services.asr_service import ASRService, ASRServiceError
+from app.services.asr_service import ASRServiceError
 from app.services.embedding_service import EmbeddingService
 from app.workflows.record_workflow import execute_record_workflow
 
@@ -148,39 +147,6 @@ async def create_voice_record(
         logger.exception("创建语音记录失败")
         raise HTTPException(
             status_code=500, detail=t(language, "voice_record_failed", error=e)
-        ) from e
-
-
-@router.post("/records/voice/transcribe", response_model=VoiceTranscriptionResponse)
-async def transcribe_voice(
-    file: Annotated[UploadFile, File(...)],
-    user_id: CurrentUserId,
-    language: LanguageDep,
-):
-    """只转写语音，允许客户端编辑后再正式保存。"""
-    if not file.content_type or not file.content_type.startswith("audio"):
-        raise HTTPException(status_code=400, detail=t(language, "audio_required"))
-
-    try:
-        file_data = await file.read()
-        result = await ASRService().transcribe_with_summary(
-            file_data,
-            file.filename or "audio.wav",
-        )
-        return VoiceTranscriptionResponse(
-            text=result["text"],
-            summary=result["summary"],
-        )
-    except AuthenticationError as e:
-        logger.exception("语音转写时模型服务认证失败")
-        raise _model_auth_error(language) from e
-    except (OpenAIError, ASRServiceError) as e:
-        logger.exception("语音转写时模型服务调用失败")
-        raise _model_service_error(e, language) from e
-    except Exception as e:
-        logger.exception("语音转写失败")
-        raise HTTPException(
-            status_code=500, detail=t(language, "transcribe_failed", error=e)
         ) from e
 
 

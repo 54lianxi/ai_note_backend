@@ -43,12 +43,6 @@ class RecordListResponse(BaseModel):
     total: int
 
 
-class VoiceTranscriptionResponse(BaseModel):
-    """语音转写响应，不直接写入记录"""
-    text: str
-    summary: str
-
-
 class ImageKeyInfo(BaseModel):
     """图片关键信息"""
     extracted_text: str | None = None
