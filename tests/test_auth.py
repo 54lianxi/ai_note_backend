@@ -3,10 +3,12 @@ from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.api.auth import (
+    REVIEW_USERNAME,
     _apple_user_id,
     _apple_username,
     _google_user_id,
     _google_username,
+    sign_in_as_review_account,
 )
 from app.config import settings
 from app.core.security import (
@@ -88,3 +90,17 @@ def test_dev_auth_bypass_is_rejected_when_debug_is_disabled(monkeypatch):
         get_current_user_id(credentials)
 
     assert error.value.status_code == 401
+
+
+def test_review_username_fits_existing_column():
+    assert len(REVIEW_USERNAME) <= 50
+
+
+@pytest.mark.asyncio
+async def test_review_login_is_disabled_by_flag(monkeypatch):
+    monkeypatch.setattr(settings, "REVIEW_LOGIN_ENABLED", False)
+
+    with pytest.raises(HTTPException) as error:
+        await sign_in_as_review_account(db=None)
+
+    assert error.value.status_code == 404

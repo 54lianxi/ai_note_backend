@@ -26,6 +26,9 @@ APPLE_ISSUER = "https://appleid.apple.com"
 APPLE_USER_NAMESPACE = uuid.UUID("6b5ddfd9-86dd-4c1d-87c6-70a069f7343d")
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 GOOGLE_USER_NAMESPACE = uuid.UUID("f767f7f3-f1d0-4c7c-8e95-70d05f6af3d4")
+REVIEW_USER_NAMESPACE = uuid.UUID("8f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f")
+REVIEW_USERNAME = "review_account"
+REVIEW_EMAIL = "review@kuliqi.us"
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 
@@ -190,6 +193,37 @@ async def sign_in_with_google(
         await db.flush()
     elif email and user.email != email:
         user.email = email
+
+    access_token = create_access_token({"sub": str(user.id)})
+    return AuthResponse(
+        access_token=access_token,
+        user=AuthUserResponse(
+            id=user.id,
+            username=user.username,
+            email=user.email,
+        ),
+    )
+
+
+@router.post("/auth/review", response_model=AuthResponse)
+async def sign_in_as_review_account(db: DbSession):
+    """应用商店审核账号：免密进入固定的演示账号，数据独立于真实用户。"""
+    if not settings.REVIEW_LOGIN_ENABLED:
+        raise HTTPException(status_code=404, detail="审核账号入口已关闭")
+
+    user_id = uuid.uuid5(REVIEW_USER_NAMESPACE, REVIEW_USERNAME)
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        user = User(
+            id=user_id,
+            username=REVIEW_USERNAME,
+            hashed_password="review-sign-in",
+            email=REVIEW_EMAIL,
+        )
+        db.add(user)
+        await db.flush()
 
     access_token = create_access_token({"sub": str(user.id)})
     return AuthResponse(
