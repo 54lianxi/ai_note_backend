@@ -79,6 +79,16 @@ async def terms_of_service() -> FileResponse:
     return _static_page("terms.html")
 
 
+@app.api_route("/account-deletion", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route(
+    "/account-deletion.html", methods=["GET", "HEAD"], include_in_schema=False
+)
+@app.api_route("/delete-account", methods=["GET", "HEAD"], include_in_schema=False)
+async def account_deletion() -> FileResponse:
+    """账号注销申请页面，供应用内跳转和应用商店「账号删除」链接使用。"""
+    return _static_page("account-deletion.html")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(

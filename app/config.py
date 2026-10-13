@@ -1,4 +1,6 @@
 """应用配置管理"""
+import os
+
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
@@ -114,6 +116,10 @@ class Settings(BaseSettings):
     # 仅用于本地开发免登录，生产环境必须保持关闭。
     DEV_AUTH_BYPASS: bool = Field(default=False)
 
+    # 应用商店审核账号：审核员在登录页连点副标题 5 次即可免密进入。
+    # 审核结束后设为 false 就能关掉这个入口。
+    REVIEW_LOGIN_ENABLED: bool = Field(default=True)
+
     @model_validator(mode="after")
     def _reuse_llm_key(self) -> "Settings":
         """向量和语音没单独配 key 时复用大模型的 key。
@@ -126,7 +132,12 @@ class Settings(BaseSettings):
             self.ASR_API_KEY = self.LLM_API_KEY
         return self
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+    # 默认读 .env；部署/生产用 ENV_FILE 指定，例如 ENV_FILE=.env.prod。
+    #model_config = {
+    #     "env_file": os.getenv("ENV_FILE", ".env"),
+    #     "env_file_encoding": "utf-8",
+    #     "extra": "ignore",
+    # }
 
 
 # 全局配置实例
