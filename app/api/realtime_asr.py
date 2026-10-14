@@ -5,7 +5,9 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.security import get_websocket_user_id
+from app.infrastructure.database import async_session_factory
 from app.services.realtime_asr_service import RealtimeASRService
+from app.services.subscription_service import is_subscribed
 
 router = APIRouter(tags=["实时语音转写"])
 logger = logging.getLogger(__name__)
@@ -15,9 +17,18 @@ logger = logging.getLogger(__name__)
 async def realtime_transcription(websocket: WebSocket):
     token = websocket.query_params.get("token")
     try:
-        get_websocket_user_id(token)
+        user_id = get_websocket_user_id(token)
     except Exception:
         await websocket.close(code=4401, reason="未登录")
+        return
+
+    # 实时转写是订阅功能：未订阅直接拒绝，省得白跑一趟上游模型。
+    async with async_session_factory() as session:
+        subscribed = await is_subscribed(session, user_id)
+    if not subscribed:
+        await websocket.accept()
+        await websocket.send_json({"type": "error", "message": "subscription_required"})
+        await websocket.close(code=4403, reason="需要订阅")
         return
 
     await websocket.accept()

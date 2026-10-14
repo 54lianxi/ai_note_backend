@@ -29,6 +29,16 @@ location /api/ {
 
 改完执行 `sudo nginx -t && sudo systemctl reload nginx`。
 
+## 部署：图片/音频走 API 转发，不用暴露 MinIO
+
+对象存储（MinIO）只在服务器本机监听 `9000`，公网连不上。所以 `file_url` /
+`image_url` 里存的直连地址（`http://localhost:9000/...`）在客户端会被改写成
+`https://<域名>/api/v1/media/...`，由后端 `GET /api/v1/media/{path}` 从 MinIO
+取出来再转发，音频需要的 Range 请求也支持（否则进度条拖不动）。
+
+也就是说 nginx 不需要给 MinIO 单独开端口或 location，`/api/` 反代配好就够了。
+顺便别把 9000 直接暴露到公网——媒体接口是公开只读的，越少入口越好。
+
 ## 部署：代理变量必须留空
 
 `AI_HTTP_PROXY` / `ASR_REALTIME_PROXY` 是给国内本机挂 Clash 用的

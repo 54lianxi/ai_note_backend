@@ -8,6 +8,7 @@ from app.api.auth import (
     _apple_username,
     _google_user_id,
     _google_username,
+    _object_name_from_url,
     sign_in_as_review_account,
 )
 from app.config import settings
@@ -94,6 +95,16 @@ def test_dev_auth_bypass_is_rejected_when_debug_is_disabled(monkeypatch):
 
 def test_review_username_fits_existing_column():
     assert len(REVIEW_USERNAME) <= 50
+
+
+def test_object_name_from_url_extracts_minio_key():
+    url = "http://localhost:9000/notes/records/abc.png"
+
+    assert _object_name_from_url("notes", url) == "records/abc.png"
+
+
+def test_object_name_from_url_returns_none_for_foreign_url():
+    assert _object_name_from_url("notes", "https://example.com/a.png") is None
 
 
 @pytest.mark.asyncio

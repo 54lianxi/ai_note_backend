@@ -31,6 +31,7 @@ from app.schemas.record import (
 )
 from app.services.asr_service import ASRServiceError
 from app.services.embedding_service import EmbeddingService
+from app.services.subscription_service import FREE_VOICE_NOTE_LIMIT, get_state
 from app.workflows.record_workflow import (
     execute_record_workflow,
     transcribe_voice_record,
@@ -147,6 +148,7 @@ async def create_text_record(
 @router.post("/records/voice", response_model=RecordResponse)
 async def create_voice_record(
     file: Annotated[UploadFile, File(...)],
+    db: DbSession,
     user_id: CurrentUserId,
     language: LanguageDep,
     background_tasks: BackgroundTasks,
@@ -157,9 +159,18 @@ async def create_voice_record(
 
     保存请求只做存储：客户端带转写文本（实时转写）时直接入库；否则先落库并把
     转写交给后台任务，保存接口立刻返回，不再把 ASR 耗时算进「保存笔记」。
+
+    免费用户最多保存 5 条语音笔记，超出时返回 402，客户端据此引导订阅。
     """
     if not file.content_type or not file.content_type.startswith("audio"):
         raise HTTPException(status_code=400, detail=t(language, "audio_required"))
+
+    state = await get_state(db, user_id)
+    if not state.can_create_voice_note:
+        raise HTTPException(
+            status_code=402,
+            detail=t(language, "subscription_rate_limit", limit=FREE_VOICE_NOTE_LIMIT),
+        )
 
     try:
         file_data = await file.read()

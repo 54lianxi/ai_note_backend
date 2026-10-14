@@ -138,3 +138,112 @@ async def test_embed_node_skips_empty_content(monkeypatch):
     result = await record_module.embed_node(state)
 
     assert result["embedding_vector"] == []
+
+
+class _FakeRecord:
+    """只记录字段变化，不碰真实数据库。"""
+
+    def __init__(self):
+        self.content = ""
+        self.summary = None
+        self.transcription_status = "pending"
+        self.vector_id = None
+        self.updated_at = None
+
+
+class _FakeSession:
+    def __init__(self, record):
+        self._record = record
+        self.committed = False
+
+    async def get(self, _model, _key):
+        return self._record
+
+    async def commit(self):
+        self.committed = True
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class _FakeSessionFactory:
+    def __init__(self, session):
+        self.session = session
+
+    def __call__(self):
+        return self.session
+
+
+def _patch_voice_pipeline(monkeypatch, *, transcript, summary):
+    """把后台转写依赖的服务全部换成假实现。"""
+
+    class FakeAsr:
+        async def transcribe_with_summary(self, _data, _filename):
+            if isinstance(transcript, Exception):
+                raise transcript
+            return {"text": transcript, "summary": summary}
+
+    class FakeEmbedding:
+        async def embed(self, _text):
+            return [0.1, 0.2]
+
+    class FakeVectorClient:
+        def upsert(self, **_kwargs):
+            return "vector-id"
+
+    monkeypatch.setattr(record_module, "ASRService", FakeAsr)
+    monkeypatch.setattr(record_module, "EmbeddingService", FakeEmbedding)
+    monkeypatch.setattr(record_module, "get_vector_client", FakeVectorClient)
+
+
+@pytest.mark.asyncio
+async def test_background_transcription_writes_back(monkeypatch):
+    _patch_voice_pipeline(monkeypatch, transcript="明天十点评审会", summary="评审会")
+    record = _FakeRecord()
+    session = _FakeSession(record)
+    monkeypatch.setattr(
+        record_module, "async_session_factory", _FakeSessionFactory(session)
+    )
+
+    await record_module.transcribe_voice_record(
+        record_id="11111111-1111-1111-1111-111111111111",
+        user_id="00000000-0000-0000-0000-000000000001",
+        file_data=b"audio",
+        filename="audio.wav",
+    )
+
+    assert record.content == "明天十点评审会"
+    assert record.summary == "评审会"
+    assert record.transcription_status == "done"
+    assert record.vector_id == "vector-id"
+    assert record.updated_at is not None
+    assert session.committed is True
+
+
+@pytest.mark.asyncio
+async def test_background_transcription_failure_keeps_record(monkeypatch):
+    from app.services.asr_service import ASRServiceError
+
+    _patch_voice_pipeline(
+        monkeypatch, transcript=ASRServiceError("转写服务不可用"), summary=None
+    )
+    record = _FakeRecord()
+    session = _FakeSession(record)
+    monkeypatch.setattr(
+        record_module, "async_session_factory", _FakeSessionFactory(session)
+    )
+
+    await record_module.transcribe_voice_record(
+        record_id="11111111-1111-1111-1111-111111111111",
+        user_id="00000000-0000-0000-0000-000000000001",
+        file_data=b"audio",
+        filename="audio.wav",
+    )
+
+    assert record.transcription_status == "failed"
+    assert record.vector_id is None
+    assert record.updated_at is not None
+    assert session.committed is True

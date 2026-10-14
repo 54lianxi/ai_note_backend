@@ -1,17 +1,24 @@
 """认证接口"""
 import hashlib
+import logging
 import uuid
 from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from jose import JWTError, jwt
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.security import create_access_token
+from app.core.i18n import LanguageDep, t
+from app.core.security import CurrentUserId, create_access_token
 from app.infrastructure.database import get_db
+from app.infrastructure.minio_client import get_minio_client
+from app.infrastructure.vector_db import get_vector_client
+from app.models.conversation import Conversation, Message
+from app.models.record import Record
+from app.models.subscription import Subscription
 from app.models.user import User
 from app.schemas.auth import (
     AppleSignInRequest,
@@ -21,6 +28,7 @@ from app.schemas.auth import (
 )
 
 router = APIRouter(tags=["认证"])
+logger = logging.getLogger(__name__)
 
 APPLE_ISSUER = "https://appleid.apple.com"
 APPLE_USER_NAMESPACE = uuid.UUID("6b5ddfd9-86dd-4c1d-87c6-70a069f7343d")
@@ -234,3 +242,63 @@ async def sign_in_as_review_account(db: DbSession):
             email=user.email,
         ),
     )
+
+
+def _object_name_from_url(bucket: str, url: str) -> str | None:
+    """从对象存储 URL 反推 MinIO 的 object key，取不到时返回 None。"""
+    marker = f"/{bucket}/"
+    index = url.find(marker)
+    if index == -1:
+        return None
+    return url[index + len(marker):]
+
+
+@router.delete("/auth/account")
+async def delete_account(
+    db: DbSession,
+    user_id: CurrentUserId,
+    language: LanguageDep,
+):
+    """注销账户：删除用户及其全部数据（记录、对话、消息、向量、存储文件）。"""
+    uid = uuid.UUID(user_id)
+    result = await db.execute(select(User).where(User.id == uid))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail=t(language, "account_not_found"))
+
+    records = (
+        await db.execute(select(Record).where(Record.user_id == uid))
+    ).scalars().all()
+
+    # 先清外部存储：删库之后就再也定位不到这些文件了。失败只记日志，不阻塞注销。
+    minio = None
+    for record in records:
+        if record.vector_id:
+            try:
+                get_vector_client().delete(record.vector_id)
+            except Exception:
+                logger.warning("注销账户删除向量失败: %s", record.vector_id, exc_info=True)
+        for url in (record.image_url, record.file_url):
+            if not url:
+                continue
+            try:
+                if minio is None:
+                    minio = get_minio_client()
+                object_name = _object_name_from_url(minio.bucket, url)
+                if object_name:
+                    minio.delete_file(object_name)
+            except Exception:
+                logger.warning("注销账户删除文件失败: %s", url, exc_info=True)
+
+    # 按外键依赖顺序清理，最后删用户本身。
+    conversation_ids = select(Conversation.id).where(Conversation.user_id == uid)
+    await db.execute(
+        delete(Message).where(Message.conversation_id.in_(conversation_ids))
+    )
+    await db.execute(delete(Conversation).where(Conversation.user_id == uid))
+    record_ids = select(Record.id).where(Record.user_id == uid)
+    await db.execute(delete(Message).where(Message.record_id.in_(record_ids)))
+    await db.execute(delete(Record).where(Record.user_id == uid))
+    await db.execute(delete(Subscription).where(Subscription.user_id == uid))
+    await db.execute(delete(User).where(User.id == uid))
+
+    return {"message": t(language, "account_deleted")}

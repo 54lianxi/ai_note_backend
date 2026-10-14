@@ -27,3 +27,9 @@ class User(Base):
     # 关系
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
     records = relationship("Record", back_populates="user", cascade="all, delete-orphan")
+    subscription = relationship(
+        "Subscription",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )

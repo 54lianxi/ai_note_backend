@@ -120,6 +120,17 @@ class Settings(BaseSettings):
     # 审核结束后设为 false 就能关掉这个入口。
     REVIEW_LOGIN_ENABLED: bool = Field(default=True)
 
+    # 订阅（应用内购买）。
+    # 商店商品 ID：App Store Connect 与 Google Play Console 里都用同一个。
+    SUBSCRIPTION_PRODUCT_ID: str = Field(default="note_description_0.99")
+    # 未订阅用户最多能保存多少条语音笔记。
+    SUBSCRIPTION_FREE_VOICE_LIMIT: int = Field(default=5)
+    # 没有接商店服务端校验时，按客户端上报的购买结果授权多少天。
+    SUBSCRIPTION_FALLBACK_DAYS: int = Field(default=31)
+    # 是否启用商店服务端校验（Google Play Developer API / Apple App Store
+    # Server API）。接好凭证后设为 true，就能用商店返回的到期时间，不再信任客户端。
+    SUBSCRIPTION_VERIFY_WITH_STORE: bool = Field(default=False)
+
     @model_validator(mode="after")
     def _reuse_llm_key(self) -> "Settings":
         """向量和语音没单独配 key 时复用大模型的 key。
