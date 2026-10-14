@@ -25,6 +25,10 @@ class Record(Base):
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # MinIO 图片地址
     image_key_info: Mapped[str | None] = mapped_column(Text, nullable=True)  # 视觉模型提取的关键信息
     vector_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # 向量数据库中的 ID
+    # 语音保存后转写状态：pending 表示保存已完成、正在后台转写。
+    transcription_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="done", server_default="done"
+    )
     file_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # 通用附件地址
     file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_content_type: Mapped[str | None] = mapped_column(String(120), nullable=True)

@@ -25,6 +25,7 @@ class RecordResponse(BaseModel):
     file_name: str | None = None
     file_content_type: str | None = None
     file_size: int | None = None
+    transcription_status: str = "done"
     created_at: datetime
     updated_at: datetime | None = None
 

@@ -63,6 +63,11 @@ async def init_db():
         await conn.execute(text(
             "ALTER TABLE records ADD COLUMN IF NOT EXISTS file_size INTEGER"
         ))
+        # 语音保存后台转写状态：历史数据一律视为已完成。
+        await conn.execute(text(
+            "ALTER TABLE records ADD COLUMN IF NOT EXISTS "
+            "transcription_status VARCHAR(20) NOT NULL DEFAULT 'done'"
+        ))
         await conn.execute(text(
             "ALTER TABLE records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP"
         ))

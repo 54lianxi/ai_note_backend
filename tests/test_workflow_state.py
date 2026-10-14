@@ -72,3 +72,69 @@ async def test_embed_node_degrades_when_model_service_fails(monkeypatch):
 
     assert result["embedding_vector"] == []
     assert "向量化失败" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_process_voice_node_defers_transcription_without_text(monkeypatch):
+    """没有转写文本时保存不再同步跑 ASR，交给后台任务。"""
+
+    class FailingAsrService:
+        def __init__(self):
+            raise AssertionError("保存流程不应该同步调用 ASR")
+
+    monkeypatch.setattr(record_module, "ASRService", FailingAsrService)
+
+    state = record_module.RecordState(
+        user_id="00000000-0000-0000-0000-000000000001",
+        content_type="voice",
+        content="",
+    )
+
+    result = await record_module.process_voice_node(state)
+
+    assert result["content"] == ""
+    assert result["transcription_status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_process_voice_node_uses_client_transcript(monkeypatch):
+    """实时转写的结果直接用，状态直接是完成。"""
+
+    class FailingAsrService:
+        def __init__(self):
+            raise AssertionError("已有转写文本时不应该再调 ASR")
+
+    monkeypatch.setattr(record_module, "ASRService", FailingAsrService)
+
+    state = record_module.RecordState(
+        user_id="00000000-0000-0000-0000-000000000001",
+        content_type="voice",
+        content="  今天的会议记录  ",
+    )
+
+    result = await record_module.process_voice_node(state)
+
+    assert result["content"] == "今天的会议记录"
+    assert result["transcription_status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_embed_node_skips_empty_content(monkeypatch):
+    """转写未完成时 content 为空，不应调用向量化服务。"""
+
+    class FailingEmbeddingService:
+        def __init__(self):
+            raise AssertionError("空内容不应该调用向量化服务")
+
+    monkeypatch.setattr(record_module, "EmbeddingService", FailingEmbeddingService)
+
+    state = record_module.RecordState(
+        user_id="00000000-0000-0000-0000-000000000001",
+        content_type="voice",
+        content="",
+        transcription_status="pending",
+    )
+
+    result = await record_module.embed_node(state)
+
+    assert result["embedding_vector"] == []

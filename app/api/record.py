@@ -1,10 +1,18 @@
 """记录上传和记录管理接口"""
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+)
 from openai import AuthenticationError, OpenAIError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,7 +31,10 @@ from app.schemas.record import (
 )
 from app.services.asr_service import ASRServiceError
 from app.services.embedding_service import EmbeddingService
-from app.workflows.record_workflow import execute_record_workflow
+from app.workflows.record_workflow import (
+    execute_record_workflow,
+    transcribe_voice_record,
+)
 
 router = APIRouter(tags=["记录管理"])
 logger = logging.getLogger(__name__)
@@ -56,19 +67,39 @@ def _record_response(record: Record, message: str | None = None,
         file_name=record.file_name,
         file_content_type=record.file_content_type,
         file_size=record.file_size,
+        transcription_status=record.transcription_status or "done",
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
 
 
+# 后台转写任务在进程重启等情况下可能丢失，超时后把卡住的任务标记为失败，
+# 免得用户永远看到「正在转写」。
+_STALE_TRANSCRIPTION = timedelta(minutes=10)
+
+
+def _fail_stale_transcriptions(records: list[Record]) -> None:
+    cutoff = datetime.now(UTC) - _STALE_TRANSCRIPTION
+    for record in records:
+        if record.transcription_status != "pending":
+            continue
+        last_touch = ensure_utc(record.updated_at or record.created_at)
+        if last_touch is None or last_touch < cutoff:
+            record.transcription_status = "failed"
+
+
 def _workflow_response(result, language: str | None = None) -> RecordResponse:
     created_at = parse_utc(result.created_at) or datetime.now(UTC)
-    return RecordResponse(
-        record_id=uuid.UUID(result.record_id),
-        message=t(
+    if result.transcription_status == "pending":
+        message = t(language, "record_saved_transcribing")
+    else:
+        message = t(
             language,
             "record_saved" if not result.error else "record_saved_no_vector",
-        ),
+        )
+    return RecordResponse(
+        record_id=uuid.UUID(result.record_id),
+        message=message,
         content=result.content,
         summary=result.summary,
         content_type=result.content_type,
@@ -78,6 +109,7 @@ def _workflow_response(result, language: str | None = None) -> RecordResponse:
         file_name=result.filename or None,
         file_content_type=result.content_type_header or None,
         file_size=len(result.file_data) if result.file_data else None,
+        transcription_status=result.transcription_status or "done",
         created_at=created_at,
         updated_at=parse_utc(result.updated_at) or created_at,
     )
@@ -117,10 +149,15 @@ async def create_voice_record(
     file: Annotated[UploadFile, File(...)],
     user_id: CurrentUserId,
     language: LanguageDep,
+    background_tasks: BackgroundTasks,
     conversation_id: Annotated[str | None, Form()] = None,
     transcribed_text: Annotated[str | None, Form()] = None,
 ):
-    """上传语音记录。传入转写文本时跳过重复 ASR。"""
+    """上传语音记录。
+
+    保存请求只做存储：客户端带转写文本（实时转写）时直接入库；否则先落库并把
+    转写交给后台任务，保存接口立刻返回，不再把 ASR 耗时算进「保存笔记」。
+    """
     if not file.content_type or not file.content_type.startswith("audio"):
         raise HTTPException(status_code=400, detail=t(language, "audio_required"))
 
@@ -136,6 +173,14 @@ async def create_voice_record(
             content_type_header=file.content_type,
             language=language,
         )
+        if result.transcription_status == "pending" and file_data:
+            background_tasks.add_task(
+                transcribe_voice_record,
+                record_id=result.record_id,
+                user_id=user_id,
+                file_data=file_data,
+                filename=file.filename or "audio.wav",
+            )
         return _workflow_response(result, language)
     except AuthenticationError as e:
         logger.exception("创建语音记录时模型服务认证失败")
@@ -241,8 +286,10 @@ async def list_records(
         .offset(skip)
         .limit(min(limit, 100))
     )
+    records = list(result.scalars().all())
+    _fail_stale_transcriptions(records)
     return RecordListResponse(
-        records=[_record_response(record) for record in result.scalars().all()],
+        records=[_record_response(record) for record in records],
         total=count,
     )
 
@@ -266,6 +313,7 @@ async def get_record(
         raise HTTPException(
             status_code=404, detail=t(language, "record_not_found")
         )
+    _fail_stale_transcriptions([record])
     return _record_response(record)
 
 

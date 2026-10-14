@@ -38,6 +38,8 @@ class RecordState:
     file_url: str = ""  # MinIO 通用附件 URL
     embedding_vector: list[float] = field(default_factory=list)
     summary: str = ""
+    # 语音转写状态：done 已完成（或不需要转写）、pending 保存后由后台任务转写。
+    transcription_status: str = "done"
     
     # 输出
     record_id: str = ""
@@ -56,7 +58,11 @@ async def process_text_node(state: RecordState) -> dict:
 
 
 async def process_voice_node(state: RecordState) -> dict:
-    """处理语音输入：音频存对象存储 + ASR 转写"""
+    """处理语音输入：音频存对象存储。
+
+    客户端已经带转写文本（实时转写）时直接用它的结果；否则保存请求立即返回，
+    等后台任务再做 ASR，避免把转写耗时算进「保存笔记」。
+    """
     # 1. 保存原始音频，记录详情页可以回放（失败不影响记录本身）。
     if state.file_data:
         try:
@@ -72,19 +78,21 @@ async def process_voice_node(state: RecordState) -> dict:
     if state.content.strip():
         text = state.content.strip()
         summary = text[:100] + "..." if len(text) > 100 else text
+        status = "done"
     else:
-        asr = ASRService()
-        result = await asr.transcribe_with_summary(state.file_data, state.filename)
-        text = result["text"]
-        summary = result["summary"]
+        text = ""
+        summary = ""
+        status = "pending"
 
     state.content = text
     state.summary = summary
     state.transcribed_text = text
+    state.transcription_status = status
     return {
         "content": text,
         "summary": summary,
         "transcribed_text": text,
+        "transcription_status": status,
         "file_url": state.file_url,
     }
 
@@ -160,7 +168,14 @@ async def process_file_node(state: RecordState) -> dict:
 
 
 async def embed_node(state: RecordState) -> dict:
-    """文本向量化"""
+    """文本向量化。
+
+    语音记录在后台转写完成前 content 为空，此时跳过向量化，等转写完成后再补。
+    """
+    if not state.content.strip():
+        state.embedding_vector = []
+        return {"embedding_vector": []}
+
     embedding = EmbeddingService()
     try:
         vector = await embedding.embed(state.content)
@@ -210,6 +225,7 @@ async def store_node(state: RecordState) -> dict:
             image_url=state.image_url or None,
             image_key_info=json.dumps(state.image_key_info, ensure_ascii=False) if state.image_key_info else None,
             vector_id=vector_id,
+            transcription_status=state.transcription_status,
             file_url=state.file_url or None,
             file_name=state.filename or None,
             file_content_type=state.content_type_header or None,
@@ -309,3 +325,59 @@ async def execute_record_workflow(
     if isinstance(result, RecordState):
         return result
     return RecordState(**result)
+
+
+async def transcribe_voice_record(
+    record_id: str,
+    user_id: str,
+    file_data: bytes,
+    filename: str,
+) -> None:
+    """保存语音记录后的后台转写：ASR → 向量化 → 回写记录。
+
+    由保存接口用 FastAPI BackgroundTasks 调度，所以保存请求本身不等转写。
+    转写失败只把状态标记为 failed，记录和音频都保留，用户可回放音频。
+    """
+    status = "done"
+    text = ""
+    summary: str | None = None
+    try:
+        result = await ASRService().transcribe_with_summary(file_data, filename)
+        text = (result.get("text") or "").strip()
+        summary = result.get("summary") or None
+    except Exception:
+        status = "failed"
+        logger.exception("语音记录后台转写失败，record_id=%s", record_id)
+
+    vector_id = None
+    if text:
+        try:
+            vector = await EmbeddingService().embed(text)
+            vector_id = get_vector_client().upsert(
+                vector=vector,
+                payload={
+                    "record_id": record_id,
+                    "user_id": user_id,
+                    "content": text,
+                    "summary": summary or "",
+                    "content_type": "voice",
+                    "created_at": datetime.now(UTC).isoformat(),
+                },
+                point_id=record_id,
+            )
+        except Exception:
+            logger.warning("语音记录后台向量化失败，record_id=%s", record_id, exc_info=True)
+
+    async with async_session_factory() as session:
+        record = await session.get(Record, uuid.UUID(record_id))
+        if record is None:
+            logger.warning("后台转写找不到记录，record_id=%s", record_id)
+            return
+        record.content = text
+        record.summary = summary
+        record.transcription_status = status
+        if vector_id:
+            record.vector_id = vector_id
+        # 转写完成时间就是记录更新时间，前端据此判断内容是否已刷新。
+        record.updated_at = datetime.now(UTC)
+        await session.commit()
