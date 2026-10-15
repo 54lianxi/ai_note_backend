@@ -97,19 +97,26 @@ async def load_records_node(state: SearchState) -> dict:
 
 
 async def generate_answer_node(state: SearchState) -> dict:
-    """使用 LLM 生成自然语言回答"""
+    """使用 LLM 生成自然语言回答，并根据 LLM 判断过滤相关记录"""
     if not state.full_records:
         state.answer = t(state.language, "no_results")
         return {"answer": state.answer, "results": []}
     
     llm = LLMService()
-    answer = await llm.generate_search_answer(
+    answer, relevant_indices = await llm.generate_search_answer(
         state.query,
         state.full_records,
         language=state.language,
     )
     state.answer = answer
-    state.results = state.full_records
+    # 只保留 LLM 判定为相关的记录；1-based 编号转 0-based 索引
+    if relevant_indices:
+        relevant_set = {i - 1 for i in relevant_indices}
+        state.results = [
+            r for idx, r in enumerate(state.full_records) if idx in relevant_set
+        ]
+    else:
+        state.results = []
     
     # 写入对话消息（用户提问）
     async with async_session_factory() as session:

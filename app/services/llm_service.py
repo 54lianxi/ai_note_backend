@@ -112,13 +112,44 @@ class LLMService:
         query: str,
         results: list[dict],
         language: str | None = None,
-    ) -> str:
+    ) -> tuple[str, list[int]]:
         """
-        根据检索结果生成自然语言回答
+        根据检索结果生成自然语言回答，并返回相关记录编号。
         :param query: 用户查询
         :param results: 检索结果列表
         :param language: 回答语言（zh / en）
-        :return: 自然语言回答
+        :return: (自然语言回答, 相关记录的 1-based 编号列表)
         """
         system_prompt, prompt = search_answer_prompts(language, query, results)
-        return await self.generate(prompt, system_prompt)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": 1000,
+        }
+        try:
+            response = await self.client.chat.completions.create(
+                **payload,
+                response_format={"type": "json_object"},
+            )
+        except BadRequestError:
+            response = await self.client.chat.completions.create(**payload)
+
+        raw = response.choices[0].message.content or ""
+        try:
+            data = json.loads(raw)
+            answer = data.get("answer", raw)
+            relevant_indices = data.get("relevant_indices", [])
+            if not isinstance(relevant_indices, list):
+                relevant_indices = []
+            relevant_indices = [
+                i for i in relevant_indices
+                if isinstance(i, int) and 1 <= i <= len(results)
+            ]
+            return answer, relevant_indices
+        except (json.JSONDecodeError, AttributeError):
+            return raw, list(range(1, len(results) + 1))

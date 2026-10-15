@@ -116,14 +116,25 @@ _SEARCH_ANSWER_SYSTEM = {
     "zh": (
         "你是一个智能记录助手。根据用户的查询和检索到的相关记录，"
         "用自然语言组织一个清晰、准确的回答。"
-        "如果检索结果中没有相关信息，请如实告知用户。"
-        "回答要简洁，重点突出。用中文回答。"
+        "如果检索结果中没有与查询直接相关的信息，请如实告知用户。"
+        "回答要简洁，重点突出。用中文回答。\n\n"
+        "你必须以严格的 JSON 格式返回，包含以下两个字段：\n"
+        '- "answer": 给用户的自然语言回答文本\n'
+        '- "relevant_indices": 与用户查询直接相关的记录编号列表（整数数组）。'
+        "如果某条记录的内容与查询无直接关系，不要包含其编号。"
+        "如果没有相关记录，返回空数组 []。"
     ),
     "en": (
         "You are a smart note assistant. Using the user's query and the retrieved "
         "notes, write a clear and accurate answer in natural language. "
-        "If the notes contain nothing relevant, say so honestly. "
-        "Keep the answer concise and to the point. Answer in English."
+        "If the notes contain nothing directly relevant, say so honestly. "
+        "Keep the answer concise and to the point. Answer in English.\n\n"
+        "You MUST return a strict JSON object with exactly two fields:\n"
+        '- "answer": the natural language answer text\n'
+        '- "relevant_indices": a list of integer indices for records that are '
+        "directly relevant to the user's query. "
+        "Do not include indices of records that are not directly relevant. "
+        "Return an empty array [] if no records are relevant."
     ),
 }
 
@@ -135,7 +146,7 @@ _CONTEXT_LABELS = {
         "content": "内容",
         "query": "用户查询",
         "records": "检索到的相关记录",
-        "ask": "请根据以上信息回答用户的问题。",
+        "ask": "请根据以上信息回答用户的问题。注意：记录编号从 1 开始，请在 relevant_indices 中使用这些编号。",
     },
     "en": {
         "record": "Note",
@@ -144,7 +155,7 @@ _CONTEXT_LABELS = {
         "content": "Content",
         "query": "User query",
         "records": "Retrieved notes",
-        "ask": "Answer the user's question based on the information above.",
+        "ask": "Answer the user's question based on the information above. Note: record indices start from 1; use these numbers in relevant_indices.",
     },
 }
 
