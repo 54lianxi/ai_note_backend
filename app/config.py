@@ -122,7 +122,7 @@ class Settings(BaseSettings):
 
     # 订阅（应用内购买）。
     # 商店商品 ID：App Store Connect 与 Google Play Console 里都用同一个。
-    SUBSCRIPTION_PRODUCT_ID: str = Field(default="note_description_0.99")
+    SUBSCRIPTION_PRODUCT_ID: str = Field(default="note_subscription_0.99")
     # 未订阅用户最多能保存多少条语音笔记。
     SUBSCRIPTION_FREE_VOICE_LIMIT: int = Field(default=5)
     # 没有接商店服务端校验时，按客户端上报的购买结果授权多少天。
