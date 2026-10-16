@@ -15,19 +15,23 @@ from app.core.security import CurrentUserId
 from app.core.timeutil import parse_utc
 from app.infrastructure.database import get_db
 from app.models.conversation import Conversation
+from app.models.conversation import Message
 from app.schemas.chat import (
     ConversationCreate,
     ConversationDetailResponse,
     ConversationListResponse,
     ConversationResponse,
+    MessageResponse,
     TextMessageRequest,
     TextMessageResponse,
 )
 from app.schemas.record import RecordResponse
 from app.schemas.search import SearchResultItem
 from app.services.llm_service import LLMService
+from app.models.record import Record
 from app.workflows.record_workflow import execute_record_workflow
 from app.workflows.search_workflow import execute_search_workflow
+from app.api.record import _record_response
 
 router = APIRouter(tags=["对话管理"])
 logger = logging.getLogger(__name__)
@@ -59,6 +63,36 @@ def _search_items(results: list[dict]) -> list[SearchResultItem]:
             created_at=parse_utc(r.get("created_at")) or datetime.now(UTC),
         ))
     return items
+
+
+def _related_record_ids(message: Message) -> list[uuid.UUID]:
+    """消息里存的关联记录 ID。JSONB 里存的是字符串，脏数据直接跳过。"""
+    ids: list[uuid.UUID] = []
+    for value in message.related_record_ids or []:
+        try:
+            ids.append(uuid.UUID(str(value)))
+        except (TypeError, ValueError):
+            logger.warning("消息 %s 的关联记录 ID 无效：%r", message.id, value)
+    return ids
+
+
+def _message_response(
+    message: Message,
+    related: dict[uuid.UUID, RecordResponse],
+) -> MessageResponse:
+    """消息 + 关联笔记，聊天里据此在回答下方渲染笔记链接。"""
+    ids = _related_record_ids(message)
+    return MessageResponse(
+        id=message.id,
+        conversation_id=message.conversation_id,
+        role=message.role,
+        content=message.content,
+        content_type=message.content_type,
+        record_id=message.record_id,
+        related_record_ids=ids,
+        related_records=[related[rid] for rid in ids if rid in related],
+        created_at=message.created_at,
+    )
 
 
 @router.post("/messages/text", response_model=TextMessageResponse)
@@ -188,8 +222,31 @@ async def get_conversation(
         raise HTTPException(
             status_code=404, detail=t(language, "conversation_not_found")
         )
-    
-    return conv
+
+    # 检索类回答关联的笔记一次性查出来，附在消息上，聊天里就能在回答
+    # 下方直接给出可点的笔记链接；没有关联笔记的消息保持空列表。
+    related_ids = {
+        rid for msg in conv.messages for rid in _related_record_ids(msg)
+    }
+    related: dict[uuid.UUID, RecordResponse] = {}
+    if related_ids:
+        rows = await db.execute(
+            select(Record).where(
+                Record.id.in_(related_ids),
+                Record.user_id == uuid.UUID(user_id),
+            )
+        )
+        related = {
+            record.id: _record_response(record, language=language)
+            for record in rows.scalars()
+        }
+
+    return ConversationDetailResponse(
+        id=conv.id,
+        title=conv.title,
+        created_at=conv.created_at,
+        messages=[_message_response(msg, related) for msg in conv.messages],
+    )
 
 
 @router.delete("/conversations/{conversation_id}")

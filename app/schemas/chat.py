@@ -54,6 +54,9 @@ class MessageResponse(BaseModel):
     content_type: str
     record_id: uuid.UUID | None
     related_record_ids: list[uuid.UUID] = Field(default_factory=list)
+    # 关联笔记的完整信息：聊天里在回答下方直接给出可点的笔记链接。
+    # 没有关联笔记（比如检索没命中）时为空列表。
+    related_records: list[RecordResponse] = Field(default_factory=list)
     created_at: datetime
 
     @field_validator("related_record_ids", mode="before")
