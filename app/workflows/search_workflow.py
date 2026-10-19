@@ -3,7 +3,9 @@ import uuid
 from dataclasses import dataclass, field
 
 from langgraph.graph import END, START, StateGraph
+from sqlalchemy import select
 
+from app.config import settings
 from app.core.i18n import t
 from app.core.timeutil import ensure_utc
 from app.infrastructure.database import async_session_factory
@@ -21,7 +23,7 @@ class SearchState:
     user_id: str
     conversation_id: str
     query: str = ""
-    top_k: int = 5
+    top_k: int = 8
     language: str | None = None  # 回答语言，来自请求的 Accept-Language
     
     # 中间状态
@@ -52,7 +54,54 @@ async def vector_search_node(state: SearchState) -> dict:
         vector=state.query_vector,
         top_k=state.top_k,
         user_id=state.user_id,
+        score_threshold=settings.SEARCH_SCORE_THRESHOLD,
     )
+    state.search_results = results
+    return {"search_results": results}
+
+
+def _mentions_image(query: str) -> bool:
+    lowered = query.lower()
+    hints = ("图", "照片", "截图", "拍", "image", "photo", "picture", "screenshot")
+    return any(hint in lowered for hint in hints)
+
+
+async def supplement_image_node(state: SearchState) -> dict:
+    """问的是图片时，把最近的几张图片笔记也放进候选。
+
+    图片笔记的 OCR 文本很长，单条向量很容易被其它短笔记挤到 top_k 之外，
+    这里按时间补几条，是否真的相关交给 LLM 判断。
+    """
+    if not _mentions_image(state.query):
+        return {}
+
+    async with async_session_factory() as session:
+        stmt = (
+            select(Record)
+            .where(
+                Record.user_id == uuid.UUID(state.user_id),
+                Record.content_type == "image",
+            )
+            .order_by(Record.created_at.desc())
+            .limit(3)
+        )
+        records = (await session.execute(stmt)).scalars().all()
+
+    results = list(state.search_results)
+    known = {r["payload"].get("record_id") for r in results if r.get("payload")}
+    for record in records:
+        record_id = str(record.id)
+        if record_id in known:
+            continue
+        results.append({
+            "score": 0.0,
+            "payload": {
+                "record_id": record_id,
+                "content_type": "image",
+                "content": record.content,
+                "summary": record.summary,
+            },
+        })
     state.search_results = results
     return {"search_results": results}
 
@@ -65,7 +114,6 @@ async def load_records_node(state: SearchState) -> dict:
     record_ids = [r["payload"].get("record_id") for r in state.search_results if r["payload"].get("record_id")]
     
     async with async_session_factory() as session:
-        from sqlalchemy import select
         stmt = select(Record).where(Record.id.in_([uuid.UUID(rid) for rid in record_ids]))
         result = await session.execute(stmt)
         records = result.scalars().all()
@@ -152,13 +200,15 @@ def build_search_workflow() -> StateGraph:
     # 添加节点
     workflow.add_node("embed_query", embed_query_node)
     workflow.add_node("vector_search", vector_search_node)
+    workflow.add_node("supplement_image", supplement_image_node)
     workflow.add_node("load_records", load_records_node)
     workflow.add_node("generate_answer", generate_answer_node)
     
     # 连接边
     workflow.add_edge(START, "embed_query")
     workflow.add_edge("embed_query", "vector_search")
-    workflow.add_edge("vector_search", "load_records")
+    workflow.add_edge("vector_search", "supplement_image")
+    workflow.add_edge("supplement_image", "load_records")
     workflow.add_edge("load_records", "generate_answer")
     workflow.add_edge("generate_answer", END)
     
@@ -173,7 +223,7 @@ async def execute_search_workflow(
     user_id: str,
     conversation_id: str,
     query: str,
-    top_k: int = 5,
+    top_k: int = 8,
     language: str | None = None,
 ) -> SearchState:
     """执行检索工作流"""

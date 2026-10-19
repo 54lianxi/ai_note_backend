@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = Field(default="gemini-embedding-2")
     EMBEDDING_DIM: int = Field(default=1536)
 
+    # 向量检索的最低相似度。gemini-embedding-2 的分数整体偏高、区分度小，
+    # 真正相关的记录也常常只有 0.45~0.55，阈值 0.5 会把图片笔记这类
+    # 长文本记录直接过滤掉。
+    SEARCH_SCORE_THRESHOLD: float = Field(default=0.3)
+
     # 语音转文字（录音文件）。
     # provider=gemini 走 Files API + /v1beta/interactions；
     # provider=openai 走 OpenAI 兼容的 /audio/transcriptions（Groq、OpenAI、硅基流动都适用）。

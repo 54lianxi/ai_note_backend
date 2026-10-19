@@ -8,7 +8,7 @@ class SearchRequest(BaseModel):
     """检索请求"""
     conversation_id: uuid.UUID
     query: str = Field(..., min_length=1, max_length=1000)
-    top_k: int = Field(default=5, ge=1, le=20)
+    top_k: int = Field(default=8, ge=1, le=20)
 
 
 class SearchResultItem(BaseModel):

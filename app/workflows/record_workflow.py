@@ -133,7 +133,8 @@ async def process_image_node(state: RecordState) -> dict:
             t(state.language, "image_description", text=key_info["description"])
         )
     fallback = t(state.language, "image_record")
-    state.content = "\n".join(parts) if parts else fallback
+    # 文字和描述各成一段，中间空一行，详情页和检索都更好读。
+    state.content = "\n\n".join(parts) if parts else fallback
     state.summary = key_info.get("summary") or fallback
     
     return {

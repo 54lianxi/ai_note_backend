@@ -64,8 +64,8 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "account_deleted": "账户已注销",
         "account_not_found": "账户不存在",
         "image_record": "图片记录",
-        "image_text": "图片文字: {text}",
-        "image_description": "图片描述: {text}",
+        "image_text": "图片文字：\n{text}",
+        "image_description": "图片描述：\n{text}",
         "subscription_required": "该功能需要订阅后使用",
         "subscription_rate_limit": "语音笔记已达免费上限（{limit} 条），订阅后不限量",
         "subscription_product_unknown": "订阅商品不匹配",
@@ -95,8 +95,8 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "account_deleted": "Your account has been deleted",
         "account_not_found": "Account not found",
         "image_record": "Image note",
-        "image_text": "Text in image: {text}",
-        "image_description": "Image description: {text}",
+        "image_text": "Text in image:\n{text}",
+        "image_description": "Image description:\n{text}",
         "subscription_required": "This feature requires a subscription",
         "subscription_rate_limit": "You have reached the free limit of {limit} voice notes. Subscribe for unlimited notes",
         "subscription_product_unknown": "Subscription product mismatch",
@@ -189,15 +189,17 @@ def search_answer_prompts(
 _VISION_SYSTEM = {
     "zh": (
         "你是一个图片分析助手。请分析用户上传的图片，提取以下信息：\n"
-        "1. extracted_text: 图片中的文字内容（OCR），如果没有则为 null\n"
-        "2. description: 图片内容的详细描述\n"
+        "1. extracted_text: 图片中的文字内容（OCR），按图片里的排版保留换行；"
+        "不同区域或段落之间用空行隔开；没有文字则为 null\n"
+        "2. description: 图片内容的详细描述，分成 1~3 个自然段，段与段之间用空行隔开\n"
         "3. summary: 一句话摘要\n\n"
         "请以 JSON 格式返回结果，用中文填写内容。"
     ),
     "en": (
         "You are an image analysis assistant. Analyze the uploaded image and extract:\n"
-        "1. extracted_text: any text in the image (OCR), or null if there is none\n"
-        "2. description: a detailed description of the image\n"
+        "1. extracted_text: any text in the image (OCR), keeping the original line "
+        "breaks and separating blocks/paragraphs with a blank line; null if none\n"
+        "2. description: a detailed description in 1-3 paragraphs, separated by blank lines\n"
         "3. summary: a one-sentence summary\n\n"
         "Return the result as JSON, written in English."
     ),

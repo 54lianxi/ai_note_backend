@@ -247,3 +247,11 @@ async def test_background_transcription_failure_keeps_record(monkeypatch):
     assert record.vector_id is None
     assert record.updated_at is not None
     assert session.committed is True
+
+
+def test_image_query_detection():
+    """问图片时才会额外补最近的图片笔记。"""
+    assert search_module._mentions_image("我拍的图片里是什么")
+    assert search_module._mentions_image("看看这张截图")
+    assert search_module._mentions_image("what is in the photo?")
+    assert not search_module._mentions_image("周六要买什么")
