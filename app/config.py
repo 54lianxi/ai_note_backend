@@ -1,5 +1,4 @@
 """应用配置管理"""
-import os
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
@@ -13,6 +12,8 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
     API_PREFIX: str = "/api/v1"
+    # 移动端不依赖 CORS；公开网页只需要正式站点来源。
+    CORS_ORIGINS: str = "https://kuliqi.us"
 
     # 客户端版本检测：App 启动时拉 /app/version 决定要不要提示更新。
     APP_LATEST_VERSION: str = "1.0.0"
@@ -121,20 +122,41 @@ class Settings(BaseSettings):
     # 仅用于本地开发免登录，生产环境必须保持关闭。
     DEV_AUTH_BYPASS: bool = Field(default=False)
 
-    # 应用商店审核账号：审核员在登录页连点副标题 5 次即可免密进入。
-    # 审核结束后设为 false 就能关掉这个入口。
+    # 应用商店审核账号：审核员在登录页连点副标题 5 次后输入访问码。
+    # 访问码只放在后端环境变量和 Play Console 的审核说明里，不写进 App。
     REVIEW_LOGIN_ENABLED: bool = Field(default=True)
+    REVIEW_ACCESS_CODE: str = Field(default="")
 
     # 订阅（应用内购买）。
     # 商店商品 ID：App Store Connect 与 Google Play Console 里都用同一个。
     SUBSCRIPTION_PRODUCT_ID: str = Field(default="note_subscription_0.99")
     # 未订阅用户最多能保存多少条语音笔记。
     SUBSCRIPTION_FREE_VOICE_LIMIT: int = Field(default=5)
-    # 没有接商店服务端校验时，按客户端上报的购买结果授权多少天。
+    # 仅本地开发免校验时使用，按多少天授予订阅。
     SUBSCRIPTION_FALLBACK_DAYS: int = Field(default=31)
-    # 是否启用商店服务端校验（Google Play Developer API / Apple App Store
-    # Server API）。接好凭证后设为 true，就能用商店返回的到期时间，不再信任客户端。
-    SUBSCRIPTION_VERIFY_WITH_STORE: bool = Field(default=False)
+    # 是否启用商店服务端校验。生产环境必须保持 true；关闭后接口会拒绝
+    # 所有订阅上报，只有 DEBUG + SUBSCRIPTION_DEV_ALLOW_UNVERIFIED 才放行。
+    SUBSCRIPTION_VERIFY_WITH_STORE: bool = Field(default=True)
+    # 本地开发用 SKIP_IAP 调试时，需要同时打开 DEBUG 和这一项。
+    # 生产环境即使误开，也会因为 DEBUG=false 而不生效。
+    SUBSCRIPTION_DEV_ALLOW_UNVERIFIED: bool = Field(default=False)
+    # 每多久重新向商店确认一次订阅状态。业务接口只读本地缓存，
+    # 不受 Google API 延迟影响。
+    SUBSCRIPTION_CACHE_TTL_SECONDS: int = Field(default=3600)
+
+    # Google Play 服务端校验。
+    # 服务账号需要开启 Android Publisher API，并在 Play Console 里授予
+    # 「查看财务数据」和「管理订单和订阅」权限。
+    GOOGLE_PLAY_PACKAGE_NAME: str = Field(default="com.lx.note")
+    GOOGLE_PLAY_SERVICE_ACCOUNT_FILE: str = Field(default="")
+    # 也可以直接把服务账号 JSON 塞进环境变量（适合容器 Secret）。
+    GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: str = Field(default="")
+    GOOGLE_PLAY_API_BASE: str = Field(
+        default="https://androidpublisher.googleapis.com/androidpublisher/v3"
+    )
+    GOOGLE_OAUTH_TOKEN_URL: str = Field(
+        default="https://oauth2.googleapis.com/token"
+    )
 
     @model_validator(mode="after")
     def _reuse_llm_key(self) -> "Settings":

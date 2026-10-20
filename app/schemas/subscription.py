@@ -19,11 +19,13 @@ class SubscriptionStatusResponse(BaseModel):
 
 
 class VerifySubscriptionRequest(BaseModel):
-    """客户端购买成功后上报的凭证。"""
+    """客户端购买成功后上报的凭证。
+
+    到期时间、是否续订等权益字段一律由商店返回，不接受客户端上报。
+    旧版客户端多传的字段会被忽略。
+    """
 
     platform: Literal["android", "ios"]
     product_id: str = Field(min_length=1, max_length=100)
     purchase_token: str | None = Field(default=None, max_length=1000)
     transaction_id: str | None = Field(default=None, max_length=255)
-    expires_at: datetime | None = None
-    auto_renewing: bool = True

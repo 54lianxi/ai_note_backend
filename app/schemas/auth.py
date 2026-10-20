@@ -16,6 +16,12 @@ class GoogleSignInRequest(BaseModel):
     identity_token: str = Field(..., min_length=20)
 
 
+class ReviewLoginRequest(BaseModel):
+    """应用商店审核账号登录请求。"""
+
+    access_code: str = Field(..., min_length=8, max_length=200)
+
+
 class AuthUserResponse(BaseModel):
     """登录用户信息"""
     id: uuid.UUID

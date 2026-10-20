@@ -6,11 +6,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from app.config import settings
-from app.api.router import api_router
-from app.infrastructure.database import init_db, close_db
 # 导入所有 ORM 模型，确保 create_all 能发现全部表
-import app.models  # noqa: F401
+import app.models
+from app.api.router import api_router
+from app.config import settings
+from app.infrastructure.database import close_db, init_db
 
 # 静态页面目录（隐私政策等公开法律文本）。
 STATIC_DIR = Path(__file__).parent / "static"
@@ -41,8 +41,12 @@ app = FastAPI(
 # CORS 中间件
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产环境应限制具体域名
-    allow_credentials=True,
+    allow_origins=[
+        origin.strip()
+        for origin in settings.CORS_ORIGINS.split(",")
+        if origin.strip()
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -87,6 +91,16 @@ async def terms_of_service() -> FileResponse:
 async def account_deletion() -> FileResponse:
     """账号注销申请页面，供应用内跳转和应用商店「账号删除」链接使用。"""
     return _static_page("account-deletion.html")
+
+
+@app.api_route("/app-ads.txt", methods=["GET", "HEAD"], include_in_schema=False)
+async def app_ads() -> FileResponse:
+    """AdMob 授权卖方文件，必须放在站点根路径。"""
+    return FileResponse(
+        STATIC_DIR / "app-ads.txt",
+        media_type="text/plain",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 if __name__ == "__main__":

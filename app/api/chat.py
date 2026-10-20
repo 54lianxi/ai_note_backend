@@ -181,17 +181,28 @@ async def list_conversations(
     skip: int = 0,
     limit: int = 20,
 ):
-    """获取对话列表"""
+    """获取对话列表。
+
+    只返回已经有消息的对话：点「新对话」后还没提问的空会话不算历史记录，
+    不占列表（它只是当前编辑中的空白窗口）。
+    """
     uid = uuid.UUID(user_id)
-    
+    has_messages = (
+        select(Message.id).where(Message.conversation_id == Conversation.id).exists()
+    )
+
     # 查询总数
-    count_stmt = select(func.count()).select_from(Conversation).where(Conversation.user_id == uid)
+    count_stmt = (
+        select(func.count())
+        .select_from(Conversation)
+        .where(Conversation.user_id == uid, has_messages)
+    )
     total = (await db.execute(count_stmt)).scalar()
     
     # 查询列表
     stmt = (
         select(Conversation)
-        .where(Conversation.user_id == uid)
+        .where(Conversation.user_id == uid, has_messages)
         .order_by(Conversation.updated_at.desc())
         .offset(skip)
         .limit(limit)

@@ -70,6 +70,11 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "subscription_rate_limit": "语音笔记已达免费上限（{limit} 条），订阅后不限量",
         "subscription_product_unknown": "订阅商品不匹配",
         "subscription_receipt_required": "缺少订阅凭证",
+        "subscription_receipt_invalid": "订阅凭证无效或已过期",
+        "subscription_not_active": "订阅未生效或已过期",
+        "subscription_verify_unavailable": "订阅校验暂时不可用，请稍后重试",
+        "subscription_token_in_use": "该购买凭证已绑定其他账号",
+        "subscription_platform_unsupported": "该平台暂不支持订阅校验",
     },
     "en": {
         "no_results": "Sorry, I couldn't find any notes related to your query.",
@@ -101,6 +106,11 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "subscription_rate_limit": "You have reached the free limit of {limit} voice notes. Subscribe for unlimited notes",
         "subscription_product_unknown": "Subscription product mismatch",
         "subscription_receipt_required": "Missing subscription receipt",
+        "subscription_receipt_invalid": "The subscription receipt is invalid or expired",
+        "subscription_not_active": "The subscription is not active or has expired",
+        "subscription_verify_unavailable": "Subscription verification is temporarily unavailable. Please try again later",
+        "subscription_token_in_use": "This purchase is already linked to another account",
+        "subscription_platform_unsupported": "Subscription verification is not supported on this platform yet",
     },
 }
 
@@ -117,7 +127,9 @@ _SEARCH_ANSWER_SYSTEM = {
         "你是一个智能记录助手。根据用户的查询和检索到的相关记录，"
         "用自然语言组织一个清晰、准确的回答。"
         "如果检索结果中没有与查询直接相关的信息，请如实告知用户。"
-        "回答要简洁，重点突出。用中文回答。\n\n"
+        "回答要简洁，重点突出。用中文回答。"
+        "如果用户请求违法、仇恨、性暴力、伤害他人或其他明显有害内容，"
+        "不要提供帮助，只简短说明无法协助。\n\n"
         "你必须以严格的 JSON 格式返回，包含以下两个字段：\n"
         '- "answer": 给用户的自然语言回答文本\n'
         '- "relevant_indices": 与用户查询直接相关的记录编号列表（整数数组）。'
@@ -128,7 +140,10 @@ _SEARCH_ANSWER_SYSTEM = {
         "You are a smart note assistant. Using the user's query and the retrieved "
         "notes, write a clear and accurate answer in natural language. "
         "If the notes contain nothing directly relevant, say so honestly. "
-        "Keep the answer concise and to the point. Answer in English.\n\n"
+        "Keep the answer concise and to the point. Answer in English. "
+        "If the user asks for illegal, hateful, sexually violent, harmful or "
+        "otherwise clearly dangerous content, do not help; briefly say you "
+        "cannot assist.\n\n"
         "You MUST return a strict JSON object with exactly two fields:\n"
         '- "answer": the natural language answer text\n'
         '- "relevant_indices": a list of integer indices for records that are '

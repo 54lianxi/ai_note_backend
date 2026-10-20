@@ -1,9 +1,23 @@
 """订阅额度与文案的单元测试。"""
+import uuid
+from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
+
+import pytest
+
 from app.config import settings
 from app.core.i18n import t
+from app.models.subscription import Subscription
+from app.services import subscription_service
+from app.services.store_verification import (
+    StoreVerificationError,
+    VerifiedSubscription,
+)
 from app.services.subscription_service import (
     FREE_VOICE_NOTE_LIMIT,
     SubscriptionState,
+    _is_active,
+    refresh_subscription_if_stale,
 )
 
 
@@ -54,3 +68,138 @@ def test_subscription_messages_exist_in_both_languages():
         assert t(language, "subscription_required")
         assert t(language, "subscription_product_unknown")
         assert t(language, "subscription_receipt_required")
+        assert t(language, "subscription_receipt_invalid")
+        assert t(language, "subscription_not_active")
+        assert t(language, "subscription_verify_unavailable")
+        assert t(language, "subscription_token_in_use")
+        assert t(language, "subscription_platform_unsupported")
+
+
+def _subscription(**overrides) -> Subscription:
+    values = {
+        "user_id": uuid.uuid4(),
+        "product_id": "note_subscription_0.99",
+        "platform": "android",
+        "purchase_token": "purchase-token",
+        "status": "active",
+        "expires_at": datetime.now(UTC) + timedelta(days=30),
+        "last_verified_at": datetime.now(UTC),
+    }
+    values.update(overrides)
+    return Subscription(**values)
+
+
+def test_unverified_subscription_is_not_active(monkeypatch):
+    monkeypatch.setattr(settings, "SUBSCRIPTION_VERIFY_WITH_STORE", True)
+    subscription = _subscription(last_verified_at=None)
+
+    assert not _is_active(subscription, datetime.now(UTC))
+
+
+def test_verified_subscription_is_active(monkeypatch):
+    monkeypatch.setattr(settings, "SUBSCRIPTION_VERIFY_WITH_STORE", True)
+    subscription = _subscription()
+
+    assert _is_active(subscription, datetime.now(UTC))
+
+
+def test_verified_but_expired_subscription_is_not_active(monkeypatch):
+    monkeypatch.setattr(settings, "SUBSCRIPTION_VERIFY_WITH_STORE", True)
+    subscription = _subscription(
+        expires_at=datetime.now(UTC) - timedelta(seconds=1)
+    )
+
+    assert not _is_active(subscription, datetime.now(UTC))
+
+
+class _FakeDb:
+    def __init__(self, subscription: Subscription):
+        self.subscription = subscription
+
+    async def execute(self, _statement):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = self.subscription
+        return result
+
+
+@pytest.mark.asyncio
+async def test_refresh_revalidates_old_unverified_row(monkeypatch):
+    monkeypatch.setattr(settings, "SUBSCRIPTION_VERIFY_WITH_STORE", True)
+    subscription = _subscription(last_verified_at=None)
+    expires_at = datetime.now(UTC) + timedelta(days=20)
+
+    async def fake_verify(**_kwargs):
+        return VerifiedSubscription(
+            platform="android",
+            product_id=subscription.product_id,
+            purchase_token=subscription.purchase_token,
+            transaction_id="GPA.1234",
+            expires_at=expires_at,
+            auto_renewing=True,
+            store_state="SUBSCRIPTION_STATE_ACTIVE",
+        )
+
+    monkeypatch.setattr(
+        subscription_service, "verify_store_subscription", fake_verify
+    )
+    await refresh_subscription_if_stale(_FakeDb(subscription), subscription.user_id)
+
+    assert subscription.last_verified_at is not None
+    assert subscription.expires_at == expires_at
+    assert _is_active(subscription, datetime.now(UTC))
+
+
+@pytest.mark.asyncio
+async def test_refresh_expires_invalid_old_row(monkeypatch):
+    monkeypatch.setattr(settings, "SUBSCRIPTION_VERIFY_WITH_STORE", True)
+    subscription = _subscription(last_verified_at=None)
+
+    async def fake_verify(**_kwargs):
+        raise StoreVerificationError("invalid_receipt", detail="not found")
+
+    monkeypatch.setattr(
+        subscription_service, "verify_store_subscription", fake_verify
+    )
+    await refresh_subscription_if_stale(_FakeDb(subscription), subscription.user_id)
+
+    assert subscription.status == "expired"
+    assert subscription.last_verified_at is not None
+    assert not _is_active(subscription, datetime.now(UTC))
+
+
+@pytest.mark.asyncio
+async def test_refresh_keeps_unverified_row_locked_when_store_is_down(monkeypatch):
+    monkeypatch.setattr(settings, "SUBSCRIPTION_VERIFY_WITH_STORE", True)
+    subscription = _subscription(last_verified_at=None)
+
+    async def fake_verify(**_kwargs):
+        raise StoreVerificationError("store_unavailable", http_status=503)
+
+    monkeypatch.setattr(
+        subscription_service, "verify_store_subscription", fake_verify
+    )
+    await refresh_subscription_if_stale(_FakeDb(subscription), subscription.user_id)
+
+    assert subscription.last_verified_at is None
+    assert not _is_active(subscription, datetime.now(UTC))
+
+
+@pytest.mark.asyncio
+async def test_refresh_keeps_previously_verified_row_when_store_is_down(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "SUBSCRIPTION_VERIFY_WITH_STORE", True)
+    monkeypatch.setattr(settings, "SUBSCRIPTION_CACHE_TTL_SECONDS", 60)
+    subscription = _subscription(
+        last_verified_at=datetime.now(UTC) - timedelta(hours=2)
+    )
+
+    async def fake_verify(**_kwargs):
+        raise StoreVerificationError("store_unavailable", http_status=503)
+
+    monkeypatch.setattr(
+        subscription_service, "verify_store_subscription", fake_verify
+    )
+    await refresh_subscription_if_stale(_FakeDb(subscription), subscription.user_id)
+
+    assert _is_active(subscription, datetime.now(UTC))

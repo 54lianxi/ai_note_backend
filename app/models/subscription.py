@@ -30,7 +30,7 @@ class Subscription(Base):
     product_id: Mapped[str] = mapped_column(String(100))
     # android / ios。
     platform: Mapped[str] = mapped_column(String(20))
-    # 商店的购买凭证，用于后续服务端校验 / 恢复。
+    # 商店的购买凭证，用于向 Google Play 等服务端查询真实订阅状态。
     purchase_token: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     original_transaction_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True
@@ -44,6 +44,11 @@ class Subscription(Base):
     )
     # 到期时间（UTC）；为空表示永久有效（例如本地开发解锁）。
     expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # 最近一次通过商店服务端校验的时间。为空表示这行数据还没被验证过
+    # （例如修复前由客户端直接上报的老数据），不能作为授权依据。
+    last_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(

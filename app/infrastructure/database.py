@@ -86,6 +86,20 @@ async def init_db():
         await conn.execute(text(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)"
         ))
+        # 订阅记录补“最近一次商店校验时间”。修复前的老数据为空，
+        # 重新校验通过之前不会授予订阅权益。
+        await conn.execute(text(
+            "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS "
+            "last_verified_at TIMESTAMPTZ"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS "
+            "purchase_token VARCHAR(1000)"
+        ))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_subscriptions_purchase_token "
+            "ON subscriptions (purchase_token)"
+        ))
         # 统一时间存储：历史列是 TIMESTAMP（无时区），按 UTC 解释后转成 TIMESTAMPTZ。
         # 只处理当前仍为 naive 的列，避免重复转换造成时区偏移。
         legacy_columns = (await conn.execute(text(

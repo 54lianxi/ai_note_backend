@@ -9,7 +9,7 @@
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.record import Record
 from app.models.subscription import Subscription
+from app.services.store_verification import (
+    StoreVerificationError,
+    VerifiedSubscription,
+    verify_store_subscription,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +48,35 @@ class SubscriptionState:
         return self.voice_note_count < FREE_VOICE_NOTE_LIMIT
 
 
+class SubscriptionTokenInUse(Exception):
+    """同一个商店凭证已经绑定到别的账号。"""
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _is_active(subscription: Subscription | None, now: datetime) -> bool:
+    """判断订阅当前是否有效。
+
+    开启商店校验后，只有经过服务端验证的记录才算数。修复前由客户端直接
+    上报的老数据 `last_verified_at` 为空，必须先在 /subscription 刷新时
+    重新验证，验证通过前不授予任何权益。
+    """
     if subscription is None or subscription.status != "active":
         return False
-    expires_at = subscription.expires_at
+    if (
+        settings.SUBSCRIPTION_VERIFY_WITH_STORE
+        and subscription.last_verified_at is None
+    ):
+        return False
+    expires_at = _as_utc(subscription.expires_at)
     if expires_at is None:
         return True
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=UTC)
     return expires_at > now
 
 
@@ -86,64 +112,135 @@ async def get_state(db: AsyncSession, user_id: str | uuid.UUID) -> SubscriptionS
     count = await count_voice_notes(db, user_id)
     return SubscriptionState(
         is_subscribed=active,
-        product_id=subscription.product_id if subscription else None,
-        platform=subscription.platform if subscription else None,
-        expires_at=subscription.expires_at if subscription else None,
-        auto_renewing=bool(subscription.auto_renewing) if subscription else False,
+        # 未验证 / 已失效的记录只用于内部排查，不把过期信息当成有效权益返回。
+        product_id=subscription.product_id if active else None,
+        platform=subscription.platform if active else None,
+        expires_at=subscription.expires_at if active else None,
+        auto_renewing=bool(subscription.auto_renewing) if active else False,
         voice_note_count=count,
         voice_note_limit=None if active else FREE_VOICE_NOTE_LIMIT,
     )
 
 
 async def is_subscribed(db: AsyncSession, user_id: str | uuid.UUID) -> bool:
-    """供各接口做权限判断。"""
+    """供各接口做权限判断。
+
+    只看本地已验证的缓存，避免每次保存笔记 / 建实时转写连接都打 Google API。
+    """
     subscription = await get_subscription(db, user_id)
     return _is_active(subscription, datetime.now(UTC))
+
+
+def _apply_verified(
+    subscription: Subscription, verified: VerifiedSubscription
+) -> None:
+    now = datetime.now(UTC)
+    subscription.platform = verified.platform
+    subscription.product_id = verified.product_id
+    subscription.purchase_token = verified.purchase_token
+    subscription.original_transaction_id = verified.transaction_id
+    subscription.auto_renewing = verified.auto_renewing
+    subscription.expires_at = verified.expires_at
+    subscription.status = "active" if verified.expires_at > now else "expired"
+    subscription.last_verified_at = now
 
 
 async def upsert_subscription(
     db: AsyncSession,
     *,
     user_id: str | uuid.UUID,
-    platform: str,
-    product_id: str,
-    purchase_token: str | None = None,
-    transaction_id: str | None = None,
-    expires_at: datetime | None = None,
-    auto_renewing: bool = True,
+    verified: VerifiedSubscription,
 ) -> Subscription:
-    """写入 / 更新订阅记录。
-
-    没有接商店服务端校验（Google Play Developer API、Apple App Store Server API）
-    时，按客户端上报的结果授权；即使客户端没带 expires_at，也兜底给一个周期，
-    免得订阅到期后无限期可用。接入校验后改用商店返回的到期时间即可。
-    """
+    """写入 / 更新已经过商店服务端验证的订阅记录。"""
     uid = user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(user_id)
-    if expires_at is None:
-        expires_at = datetime.now(UTC) + timedelta(
-            days=settings.SUBSCRIPTION_FALLBACK_DAYS
-        )
-    elif expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=UTC)
+
+    # 一份购买只能绑定一个账号，防止把同一个 purchaseToken 分享给多个人。
+    if verified.purchase_token:
+        other = (
+            await db.execute(
+                select(Subscription.id).where(
+                    Subscription.purchase_token == verified.purchase_token,
+                    Subscription.user_id != uid,
+                )
+            )
+        ).scalar_one_or_none()
+        if other is not None:
+            raise SubscriptionTokenInUse
 
     subscription = await get_subscription(db, uid)
     if subscription is None:
-        subscription = Subscription(user_id=uid, platform=platform, product_id=product_id)
+        subscription = Subscription(
+            user_id=uid,
+            platform=verified.platform,
+            product_id=verified.product_id,
+        )
         db.add(subscription)
 
-    subscription.platform = platform
-    subscription.product_id = product_id
-    subscription.purchase_token = purchase_token
-    subscription.original_transaction_id = transaction_id
-    subscription.auto_renewing = auto_renewing
-    subscription.expires_at = expires_at
-    subscription.status = "active" if expires_at > datetime.now(UTC) else "expired"
+    _apply_verified(subscription, verified)
 
     await db.flush()
-    if not settings.SUBSCRIPTION_VERIFY_WITH_STORE:
-        logger.info(
-            "已按客户端上报授权订阅（未接入商店服务端校验）: user=%s product=%s",
-            uid,
-            product_id,
-        )
     return subscription
+
+
+async def refresh_subscription_if_stale(
+    db: AsyncSession, user_id: str | uuid.UUID
+) -> None:
+    """缓存过期时向商店重新确认一次。
+
+    只在拉取订阅状态（App 启动、进订阅页）时调用；保存笔记、实时转写等
+    高频路径只读本地结果。
+    """
+    if not settings.SUBSCRIPTION_VERIFY_WITH_STORE:
+        return
+
+    subscription = await get_subscription(db, user_id)
+    if subscription is None or not subscription.purchase_token:
+        return
+
+    now = datetime.now(UTC)
+    last_verified = _as_utc(subscription.last_verified_at)
+    ttl = max(60, settings.SUBSCRIPTION_CACHE_TTL_SECONDS)
+    if (
+        last_verified is not None
+        and (now - last_verified).total_seconds() < ttl
+    ):
+        return
+
+    try:
+        verified = await verify_store_subscription(
+            platform=subscription.platform,
+            product_id=subscription.product_id,
+            purchase_token=subscription.purchase_token,
+            transaction_id=subscription.original_transaction_id,
+        )
+    except StoreVerificationError as exc:
+        if exc.code in {
+            "invalid_receipt",
+            "not_active",
+            "product_mismatch",
+            "platform_unsupported",
+        }:
+            # 商店明确说这笔订阅无效了，立即收回权益。
+            subscription.status = "expired"
+            subscription.auto_renewing = False
+            subscription.last_verified_at = now
+            logger.info(
+                "订阅已被商店判定失效: user=%s code=%s",
+                user_id,
+                exc.code,
+            )
+        else:
+            # Google 临时不可用时不把已确认过的用户踢下线；
+            # 从未验证过的记录因为 last_verified_at 为空，仍然不会授权。
+            logger.warning(
+                "订阅刷新失败，暂时保留上次状态: user=%s code=%s detail=%s",
+                user_id,
+                exc.code,
+                exc.detail,
+            )
+        return
+    except Exception:
+        logger.exception("订阅刷新出现未预期错误: user=%s", user_id)
+        return
+
+    _apply_verified(subscription, verified)

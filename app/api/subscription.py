@@ -1,9 +1,10 @@
 """订阅（应用内购买）接口。
 
-客户端在 App Store / Google Play 完成购买后，把凭证上报到这里落库；
-之后各接口（语音笔记限额、实时转写）都用这里的订阅状态做判断。
+客户端在商店完成购买后，把凭证上报到这里；后端必须向 Google Play
+校验通过才落库。之后各接口（语音笔记限额、实时转写）只读本地缓存。
 """
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,14 +18,31 @@ from app.schemas.subscription import (
     SubscriptionStatusResponse,
     VerifySubscriptionRequest,
 )
+from app.services.store_verification import (
+    StoreVerificationError,
+    VerifiedSubscription,
+    verify_store_subscription,
+)
 from app.services.subscription_service import (
+    SubscriptionTokenInUse,
     get_state,
+    refresh_subscription_if_stale,
     upsert_subscription,
 )
 
 router = APIRouter(tags=["订阅"])
 logger = logging.getLogger(__name__)
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+_ERROR_MESSAGE_KEYS = {
+    "verification_not_configured": "subscription_verify_unavailable",
+    "store_unavailable": "subscription_verify_unavailable",
+    "receipt_required": "subscription_receipt_required",
+    "invalid_receipt": "subscription_receipt_invalid",
+    "not_active": "subscription_not_active",
+    "product_mismatch": "subscription_product_unknown",
+    "platform_unsupported": "subscription_platform_unsupported",
+}
 
 
 def _status_response(state) -> SubscriptionStatusResponse:
@@ -46,6 +64,8 @@ async def get_subscription_status(
     user_id: CurrentUserId,
 ):
     """当前订阅状态与免费额度用量。App 启动、购买后、保存语音笔记前都可以调。"""
+    # 缓存过期时顺带向商店确认；高频业务接口不会走到这里。
+    await refresh_subscription_if_stale(db, user_id)
     return _status_response(await get_state(db, user_id))
 
 
@@ -67,14 +87,69 @@ async def verify_subscription(
             status_code=400, detail=t(language, "subscription_receipt_required")
         )
 
-    await upsert_subscription(
-        db,
-        user_id=user_id,
-        platform=data.platform,
-        product_id=data.product_id,
-        purchase_token=data.purchase_token,
-        transaction_id=data.transaction_id,
-        expires_at=data.expires_at,
-        auto_renewing=data.auto_renewing,
-    )
+    if settings.SUBSCRIPTION_VERIFY_WITH_STORE:
+        try:
+            verified = await verify_store_subscription(
+                platform=data.platform,
+                product_id=data.product_id,
+                purchase_token=data.purchase_token,
+                transaction_id=data.transaction_id,
+            )
+        except StoreVerificationError as exc:
+            logger.warning(
+                "订阅校验失败: user=%s platform=%s code=%s detail=%s",
+                user_id,
+                data.platform,
+                exc.code,
+                exc.detail,
+            )
+            message_key = _ERROR_MESSAGE_KEYS.get(
+                exc.code, "subscription_verify_unavailable"
+            )
+            raise HTTPException(
+                status_code=exc.http_status,
+                detail=t(language, message_key),
+            ) from exc
+    else:
+        # 只有本地开发可以显式放开。生产环境 SUBSCRIPTION_VERIFY_WITH_STORE
+        # 为 false 时直接拒绝，绝不退回信任客户端。
+        if not (settings.DEBUG and settings.SUBSCRIPTION_DEV_ALLOW_UNVERIFIED):
+            logger.error(
+                "订阅校验未启用，已拒绝上报: user=%s DEBUG=%s",
+                user_id,
+                settings.DEBUG,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=t(language, "subscription_verify_unavailable"),
+            )
+        if not (data.purchase_token or data.transaction_id):
+            raise HTTPException(
+                status_code=400,
+                detail=t(language, "subscription_receipt_required"),
+            )
+        logger.warning(
+            "DEV 模式接受未校验的订阅凭证: user=%s platform=%s",
+            user_id,
+            data.platform,
+        )
+        now = datetime.now(UTC)
+        verified = VerifiedSubscription(
+            platform=data.platform,
+            product_id=data.product_id,
+            purchase_token=data.purchase_token or data.transaction_id or "",
+            transaction_id=data.transaction_id,
+            expires_at=now
+            + timedelta(days=settings.SUBSCRIPTION_FALLBACK_DAYS),
+            auto_renewing=True,
+            store_state="DEV_UNVERIFIED",
+        )
+
+    try:
+        await upsert_subscription(db, user_id=user_id, verified=verified)
+    except SubscriptionTokenInUse as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=t(language, "subscription_token_in_use"),
+        ) from exc
     return _status_response(await get_state(db, user_id))

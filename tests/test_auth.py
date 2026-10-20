@@ -1,9 +1,11 @@
 import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
+from starlette.requests import Request
 
 from app.api.auth import (
     REVIEW_USERNAME,
+    _REVIEW_ATTEMPTS,
     _apple_user_id,
     _apple_username,
     _google_user_id,
@@ -19,6 +21,19 @@ from app.core.security import (
     decode_access_token,
     get_current_user_id,
 )
+from app.schemas.auth import ReviewLoginRequest
+
+
+def _review_request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/auth/review",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+        }
+    )
 
 
 def test_apple_user_id_is_stable():
@@ -112,6 +127,41 @@ async def test_review_login_is_disabled_by_flag(monkeypatch):
     monkeypatch.setattr(settings, "REVIEW_LOGIN_ENABLED", False)
 
     with pytest.raises(HTTPException) as error:
-        await sign_in_as_review_account(db=None)
+        await sign_in_as_review_account(
+            ReviewLoginRequest(access_code="12345678"),
+            _review_request(),
+            db=None,
+        )
 
     assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_review_login_requires_server_access_code(monkeypatch):
+    monkeypatch.setattr(settings, "REVIEW_LOGIN_ENABLED", True)
+    monkeypatch.setattr(settings, "REVIEW_ACCESS_CODE", "")
+
+    with pytest.raises(HTTPException) as error:
+        await sign_in_as_review_account(
+            ReviewLoginRequest(access_code="12345678"),
+            _review_request(),
+            db=None,
+        )
+
+    assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_review_login_rejects_wrong_access_code(monkeypatch):
+    _REVIEW_ATTEMPTS.clear()
+    monkeypatch.setattr(settings, "REVIEW_LOGIN_ENABLED", True)
+    monkeypatch.setattr(settings, "REVIEW_ACCESS_CODE", "correct-code")
+
+    with pytest.raises(HTTPException) as error:
+        await sign_in_as_review_account(
+            ReviewLoginRequest(access_code="wrong-code"),
+            _review_request(),
+            db=None,
+        )
+
+    assert error.value.status_code == 401

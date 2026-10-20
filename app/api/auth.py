@@ -1,11 +1,14 @@
 """认证接口"""
 import hashlib
 import logging
+import secrets
+import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from jose import JWTError, jwt
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +21,7 @@ from app.infrastructure.minio_client import get_minio_client
 from app.infrastructure.vector_db import get_vector_client
 from app.models.conversation import Conversation, Message
 from app.models.record import Record
+from app.models.report import AIReport
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.schemas.auth import (
@@ -25,6 +29,7 @@ from app.schemas.auth import (
     AuthResponse,
     AuthUserResponse,
     GoogleSignInRequest,
+    ReviewLoginRequest,
 )
 
 router = APIRouter(tags=["认证"])
@@ -37,7 +42,27 @@ GOOGLE_USER_NAMESPACE = uuid.UUID("f767f7f3-f1d0-4c7c-8e95-70d05f6af3d4")
 REVIEW_USER_NAMESPACE = uuid.UUID("8f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f")
 REVIEW_USERNAME = "review_account"
 REVIEW_EMAIL = "review@kuliqi.us"
+_REVIEW_ATTEMPTS: dict[str, list[float]] = {}
+_REVIEW_WINDOW_SECONDS = 10 * 60
+_REVIEW_MAX_ATTEMPTS = 5
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+
+def _review_rate_limited(client_host: str | None) -> bool:
+    """限制审核访问码的暴力尝试；多 worker 部署时再由网关限流。"""
+    now = time.monotonic()
+    key = client_host or "unknown"
+    attempts = [
+        value
+        for value in _REVIEW_ATTEMPTS.get(key, [])
+        if now - value < _REVIEW_WINDOW_SECONDS
+    ]
+    if len(attempts) >= _REVIEW_MAX_ATTEMPTS:
+        _REVIEW_ATTEMPTS[key] = attempts
+        return True
+    attempts.append(now)
+    _REVIEW_ATTEMPTS[key] = attempts
+    return False
 
 
 class AppleIdentityVerifier:
@@ -214,10 +239,22 @@ async def sign_in_with_google(
 
 
 @router.post("/auth/review", response_model=AuthResponse)
-async def sign_in_as_review_account(db: DbSession):
-    """应用商店审核账号：免密进入固定的演示账号，数据独立于真实用户。"""
+async def sign_in_as_review_account(
+    data: ReviewLoginRequest,
+    request: Request,
+    db: DbSession,
+):
+    """应用商店审核账号：访问码只存在服务端，并授予演示用订阅。"""
     if not settings.REVIEW_LOGIN_ENABLED:
         raise HTTPException(status_code=404, detail="审核账号入口已关闭")
+    if not settings.REVIEW_ACCESS_CODE:
+        raise HTTPException(status_code=503, detail="审核账号访问码尚未配置")
+    if len(settings.REVIEW_ACCESS_CODE) < 12:
+        raise HTTPException(status_code=503, detail="审核账号访问码过短")
+    if _review_rate_limited(request.client.host if request.client else None):
+        raise HTTPException(status_code=429, detail="尝试次数过多，请稍后再试")
+    if not secrets.compare_digest(data.access_code, settings.REVIEW_ACCESS_CODE):
+        raise HTTPException(status_code=401, detail="审核访问码不正确")
 
     user_id = uuid.uuid5(REVIEW_USER_NAMESPACE, REVIEW_USERNAME)
     result = await db.execute(select(User).where(User.id == user_id))
@@ -232,6 +269,25 @@ async def sign_in_as_review_account(db: DbSession):
         )
         db.add(user)
         await db.flush()
+
+    # 审核员必须能测实时转写、语音输入和去广告；只给演示账号这段订阅。
+    subscription = (
+        await db.execute(
+            select(Subscription).where(Subscription.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    now = datetime.now(UTC)
+    if subscription is None:
+        subscription = Subscription(
+            user_id=user_id,
+            product_id="review-entitlement",
+            platform="review",
+        )
+        db.add(subscription)
+    subscription.status = "active"
+    subscription.auto_renewing = False
+    subscription.expires_at = now + timedelta(days=3650)
+    subscription.last_verified_at = now
 
     access_token = create_access_token({"sub": str(user.id)})
     return AuthResponse(
@@ -298,6 +354,7 @@ async def delete_account(
     record_ids = select(Record.id).where(Record.user_id == uid)
     await db.execute(delete(Message).where(Message.record_id.in_(record_ids)))
     await db.execute(delete(Record).where(Record.user_id == uid))
+    await db.execute(delete(AIReport).where(AIReport.user_id == uid))
     await db.execute(delete(Subscription).where(Subscription.user_id == uid))
     await db.execute(delete(User).where(User.id == uid))
 

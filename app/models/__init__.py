@@ -3,5 +3,13 @@ from app.models.user import User
 from app.models.conversation import Conversation, Message
 from app.models.record import Record
 from app.models.subscription import Subscription
+from app.models.report import AIReport
 
-__all__ = ["User", "Conversation", "Message", "Record", "Subscription"]
+__all__ = [
+    "User",
+    "Conversation",
+    "Message",
+    "Record",
+    "Subscription",
+    "AIReport",
+]
