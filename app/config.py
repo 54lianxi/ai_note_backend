@@ -1,11 +1,25 @@
 """应用配置管理"""
 
+import os
+from pathlib import Path
+
 from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+_ENV_FILE = os.getenv("ENV_FILE", ".env")
+if not Path(_ENV_FILE).is_absolute():
+    _ENV_FILE = str(_BACKEND_DIR / _ENV_FILE)
 
 
 class Settings(BaseSettings):
     """应用配置"""
+
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILE,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
     
     # 应用基础配置
     APP_NAME: str = "AI-Record"
@@ -169,14 +183,6 @@ class Settings(BaseSettings):
         if not self.ASR_API_KEY:
             self.ASR_API_KEY = self.LLM_API_KEY
         return self
-
-    # 默认读 .env；部署/生产用 ENV_FILE 指定，例如 ENV_FILE=.env.prod。
-    #model_config = {
-    #     "env_file": os.getenv("ENV_FILE", ".env"),
-    #     "env_file_encoding": "utf-8",
-    #     "extra": "ignore",
-    # }
-
 
 # 全局配置实例
 settings = Settings()
