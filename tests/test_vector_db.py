@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from qdrant_client.models import FilterSelector
+
 from app.infrastructure.vector_db import VectorDBClient, record_payload
 
 
@@ -73,3 +75,50 @@ def test_search_uses_qdrant_query_points():
             "payload": {"record_id": "record-1"},
         }
     ]
+
+
+def test_upsert_chunks_uses_stable_ids_and_chunk_indexes():
+    calls = []
+
+    class FakeQdrantClient:
+        def upsert(self, **kwargs):
+            calls.append(kwargs)
+
+    vector_db = VectorDBClient.__new__(VectorDBClient)
+    vector_db.client = FakeQdrantClient()
+    vector_db.collection = "records"
+    record_id = "11111111-1111-1111-1111-111111111111"
+
+    result = vector_db.upsert_chunks(
+        chunks=[
+            {"text": "第一段", "vector": [0.1]},
+            {"text": "第二段", "vector": [0.2]},
+        ],
+        record_id=record_id,
+        user_id="user-1",
+    )
+
+    points = calls[0]["points"]
+    assert result == record_id
+    assert points[0].id == record_id
+    assert points[1].id != record_id
+    assert [point.payload["chunk_index"] for point in points] == [0, 1]
+    assert all(point.payload["record_id"] == record_id for point in points)
+
+
+def test_delete_record_removes_all_chunks_by_record_and_user():
+    calls = []
+
+    class FakeQdrantClient:
+        def delete(self, **kwargs):
+            calls.append(kwargs)
+
+    vector_db = VectorDBClient.__new__(VectorDBClient)
+    vector_db.client = FakeQdrantClient()
+    vector_db.collection = "records"
+
+    vector_db.delete_record("record-1", "user-1")
+
+    selector = calls[0]["points_selector"]
+    assert isinstance(selector, FilterSelector)
+    assert len(selector.filter.must) == 2

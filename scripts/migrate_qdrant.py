@@ -86,7 +86,11 @@ def main() -> None:
                 PointStruct(
                     id=point.id,
                     vector=point.vector,
-                    payload=record_payload(str(payload.get("record_id") or point.id), str(user_id)),
+                    payload=record_payload(
+                        str(payload.get("record_id") or point.id),
+                        str(user_id),
+                        chunk_index=payload.get("chunk_index"),
+                    ),
                 )
             )
 

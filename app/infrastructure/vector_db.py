@@ -1,10 +1,12 @@
 """Qdrant 向量数据库客户端"""
+import uuid
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    FilterSelector,
     MatchValue,
     PayloadSchemaType,
     PointStruct,
@@ -14,9 +16,19 @@ from qdrant_client.models import (
 from app.config import settings
 
 
-def record_payload(record_id: str, user_id: str) -> dict[str, str]:
+def record_payload(
+    record_id: str,
+    user_id: str,
+    chunk_index: int | None = None,
+) -> dict[str, str | int]:
     """Qdrant 只保存定位记录和隔离用户检索所需的字段。"""
-    return {"record_id": record_id, "user_id": user_id}
+    payload: dict[str, str | int] = {
+        "record_id": record_id,
+        "user_id": user_id,
+    }
+    if chunk_index is not None:
+        payload["chunk_index"] = chunk_index
+    return payload
 
 
 class VectorDBClient:
@@ -57,6 +69,12 @@ class VectorDBClient:
                 field_name="user_id",
                 field_schema=PayloadSchemaType.KEYWORD,
             )
+        if "record_id" not in indexed:
+            self.client.create_payload_index(
+                collection_name=self.collection,
+                field_name="record_id",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
     
     def upsert_record(
         self,
@@ -82,6 +100,31 @@ class VectorDBClient:
                 )
             ],
         )
+        return record_id
+
+    def upsert_chunks(
+        self,
+        chunks: list[dict],
+        record_id: str,
+        user_id: str,
+    ) -> str:
+        """写入一条记录的多个文本分块，所有点仍指向同一个 record_id。"""
+        points = []
+        for index, chunk in enumerate(chunks):
+            point_id = (
+                record_id
+                if index == 0
+                else str(uuid.uuid5(uuid.NAMESPACE_URL, f"{record_id}:{index}"))
+            )
+            points.append(
+                PointStruct(
+                    id=point_id,
+                    vector=chunk["vector"],
+                    payload=record_payload(record_id, user_id, chunk_index=index),
+                )
+            )
+        if points:
+            self.client.upsert(collection_name=self.collection, points=points)
         return record_id
     
     def search(
@@ -133,6 +176,26 @@ class VectorDBClient:
         self.client.delete(
             collection_name=self.collection,
             points_selector=[point_id],
+        )
+
+    def delete_record(self, record_id: str, user_id: str) -> None:
+        """删除一条记录的所有正文分块。"""
+        self.client.delete(
+            collection_name=self.collection,
+            points_selector=FilterSelector(
+                filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="record_id",
+                            match=MatchValue(value=record_id),
+                        ),
+                        FieldCondition(
+                            key="user_id",
+                            match=MatchValue(value=user_id),
+                        ),
+                    ]
+                )
+            ),
         )
 
 

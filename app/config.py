@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     APP_MIN_VERSION: str = ""  # 填了比它低的版本会强制更新
     APP_UPDATE_URL: str = ""  # APK 或应用商店地址
     APP_UPDATE_NOTE: str = ""  # 更新说明
+
+    # 上传大小硬限制。前端会在请求前先校验；这里防止绕过客户端直传超大资源。
+    # 64MB 可容纳约 2 小时 19 分钟的 64kbps 录音；nginx 需同步放宽到 70MB。
+    MAX_IMAGE_UPLOAD_MB: int = Field(default=8, gt=0)
+    MAX_AUDIO_UPLOAD_MB: int = Field(default=64, gt=0)
+    MAX_FILE_UPLOAD_MB: int = Field(default=45, gt=0)
+    # 单份文档最多抽取/索引的字符数，避免超大文件产生过多向量。
+    MAX_DOCUMENT_TEXT_CHARS: int = Field(default=300_000, gt=0)
     
     # 数据库配置
     DATABASE_URL: str = Field(

@@ -14,6 +14,7 @@ from app.models.conversation import Message
 from app.models.record import Record
 from app.services.embedding_service import TASK_QUERY, EmbeddingService
 from app.services.llm_service import LLMService
+from app.services.text_index import split_text_chunks
 
 
 @dataclass
@@ -52,7 +53,8 @@ async def vector_search_node(state: SearchState) -> dict:
     vector_db = get_vector_client()
     results = vector_db.search(
         vector=state.query_vector,
-        top_k=state.top_k,
+        # 多取一些分块，避免同一篇长文档占满 top_k 后挤掉其它记录。
+        top_k=state.top_k * 3,
         user_id=state.user_id,
         score_threshold=settings.SEARCH_SCORE_THRESHOLD,
     )
@@ -64,6 +66,26 @@ def _mentions_image(query: str) -> bool:
     lowered = query.lower()
     hints = ("图", "照片", "截图", "拍", "image", "photo", "picture", "screenshot")
     return any(hint in lowered for hint in hints)
+
+
+def _relevant_record_content(record_content: str, hits: list[dict]) -> str:
+    """按向量命中顺序取最多三个正文分块；旧向量没有分块编号时退回全文。"""
+    chunks = (
+        split_text_chunks(record_content)
+        if any("chunk_index" in (hit.get("payload") or {}) for hit in hits)
+        else []
+    )
+    excerpts: list[str] = []
+    for hit in hits:
+        chunk_index = (hit.get("payload") or {}).get("chunk_index")
+        content = record_content
+        if isinstance(chunk_index, int) and 0 <= chunk_index < len(chunks):
+            content = chunks[chunk_index]
+        if content and content not in excerpts:
+            excerpts.append(content)
+        if len(excerpts) >= 3:
+            break
+    return "\n\n".join(excerpts) or record_content
 
 
 async def supplement_image_node(state: SearchState) -> dict:
@@ -110,26 +132,36 @@ async def load_records_node(state: SearchState) -> dict:
     """从 PostgreSQL 加载完整记录"""
     if not state.search_results:
         return {"full_records": []}
-    
-    record_ids = [r["payload"].get("record_id") for r in state.search_results if r["payload"].get("record_id")]
-    
+
+    hits_by_record: dict[str, list[dict]] = {}
+    for result in state.search_results:
+        payload = result.get("payload") or {}
+        record_id = payload.get("record_id")
+        if record_id:
+            hits_by_record.setdefault(str(record_id), []).append(result)
+    record_ids = list(hits_by_record)
+    if not record_ids:
+        return {"full_records": []}
+
     async with async_session_factory() as session:
         stmt = select(Record).where(Record.id.in_([uuid.UUID(rid) for rid in record_ids]))
         result = await session.execute(stmt)
         records = result.scalars().all()
-    
-    # 构建完整记录列表（合并向量分数）
-    score_map = {r["payload"].get("record_id"): r["score"] for r in state.search_results}
-    
+
     full_records = []
     for record in records:
+        hits = sorted(
+            hits_by_record.get(str(record.id), []),
+            key=lambda item: item.get("score", 0),
+            reverse=True,
+        )
         full_records.append({
             "record_id": str(record.id),
-            "content": record.content,
+            "content": _relevant_record_content(record.content, hits),
             "summary": record.summary,
             "content_type": record.content_type,
             "image_url": record.image_url,
-            "score": score_map.get(str(record.id), 0),
+            "score": hits[0].get("score", 0) if hits else 0,
             "created_at": (
                 ensure_utc(record.created_at).isoformat()
                 if record.created_at

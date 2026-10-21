@@ -71,16 +71,17 @@ ASR_REALTIME_PROXY=
 默认只有 **1MB**，稍长一点的录音就会触发 HTTP 413（Request Entity Too Large），
 客户端表现为保存语音笔记失败。
 
-在 `http {}` 或 `server {}` 块里加上大小限制（建议 50MB，能覆盖大多数语音/图片场景）：
+在 `http {}` 或 `server {}` 块里加上大小限制（建议 70MB；应用默认图片 8MB、
+音频 64MB、文档 45MB，已经给 multipart 包装留出余量）：
 
 ```nginx
 http {
     # 全局生效，所有 location 都继承
-    client_max_body_size 50M;
+    client_max_body_size 70M;
 
     server {
         # 也可以只在特定 server 里生效
-        client_max_body_size 50M;
+        client_max_body_size 70M;
 
         location /api/ {
             proxy_pass http://127.0.0.1:8000;
@@ -99,7 +100,31 @@ http {
 如果只想对 API 路径放开，也可以把 `client_max_body_size` 写在 `location /api/` 里。
 改完执行 `sudo nginx -t && sudo systemctl reload nginx`。
 
-建议的大小：语音 50MB、图片 10MB、通用附件 50-100MB，按业务需求调整。
+上传限制由前后端同名配置控制，默认值如下：
+
+```dotenv
+MAX_IMAGE_UPLOAD_MB=8
+MAX_AUDIO_UPLOAD_MB=64
+MAX_FILE_UPLOAD_MB=45
+```
+
+前端可通过同名的 `--dart-define` 覆盖，后端通过 `.env` 覆盖。调整时要保证：
+前端上限 ≤ 后端上限 < nginx `client_max_body_size`。后端对超限请求返回 HTTP 413，
+前端也会在发起请求前直接提示，不会把超大文件放进离线队列。
+
+## 文档正文检索
+
+上传文档时会抽取正文并写入 Records/Qdrant，支持：
+
+- 纯文本：TXT、Markdown、CSV、JSON、XML、HTML
+- PDF：带文本层的 PDF；扫描图片型 PDF 暂不包含 OCR
+- Word：DOCX
+- Excel：XLSX
+- PowerPoint：PPTX
+
+长文档会按约 1800 字、180 字重叠分块，检索时只把命中的正文片段交给 AI。
+单份文档默认最多索引 300000 字，可通过 `MAX_DOCUMENT_TEXT_CHARS` 调整。
+旧版本上传的文档只保存了文件名，需要重新上传后才会建立正文索引。
 
 ## 部署：订阅必须配置 Google Play 服务端校验
 

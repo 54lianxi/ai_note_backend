@@ -54,10 +54,26 @@ async def test_execute_search_workflow_returns_search_state(monkeypatch):
     assert result.results == [{"record_id": "11111111-1111-1111-1111-111111111111"}]
 
 
+def test_search_uses_hit_chunk_instead_of_full_document():
+    text = "".join(f"第{i}段内容。" for i in range(500))
+    second_chunk = search_module.split_text_chunks(text)[1]
+    hits = [
+        {
+            "score": 0.92,
+            "payload": {"record_id": "record-1", "chunk_index": 1},
+        }
+    ]
+
+    content = search_module._relevant_record_content(text, hits)
+
+    assert content == second_chunk
+    assert content != text
+
+
 @pytest.mark.asyncio
 async def test_embed_node_degrades_when_model_service_fails(monkeypatch):
     class FakeEmbeddingService:
-        async def embed(self, text):
+        async def embed_batch(self, texts):
             raise OpenAIError("invalid api key")
 
     monkeypatch.setattr(record_module, "EmbeddingService", FakeEmbeddingService)
@@ -71,6 +87,7 @@ async def test_embed_node_degrades_when_model_service_fails(monkeypatch):
     result = await record_module.embed_node(state)
 
     assert result["embedding_vector"] == []
+    assert result["embedding_chunks"] == []
     assert "向量化失败" in result["error"]
 
 
@@ -138,6 +155,7 @@ async def test_embed_node_skips_empty_content(monkeypatch):
     result = await record_module.embed_node(state)
 
     assert result["embedding_vector"] == []
+    assert result["embedding_chunks"] == []
 
 
 class _FakeRecord:
@@ -187,11 +205,14 @@ def _patch_voice_pipeline(monkeypatch, *, transcript, summary):
             return {"text": transcript, "summary": summary}
 
     class FakeEmbedding:
-        async def embed(self, _text):
-            return [0.1, 0.2]
+        async def embed_batch(self, texts):
+            return [[0.1, 0.2] for _text in texts]
 
     class FakeVectorClient:
-        def upsert_record(self, **_kwargs):
+        def delete_record(self, _record_id, _user_id):
+            return None
+
+        def upsert_chunks(self, **_kwargs):
             return "vector-id"
 
     monkeypatch.setattr(record_module, "ASRService", FakeAsr)

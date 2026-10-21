@@ -17,6 +17,7 @@ from openai import AuthenticationError, OpenAIError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.i18n import LanguageDep, t
 from app.core.security import CurrentUserId
 from app.core.timeutil import ensure_utc, parse_utc
@@ -33,6 +34,7 @@ from app.services.asr_service import ASRServiceError
 from app.services.embedding_service import EmbeddingService
 from app.services.subscription_service import FREE_VOICE_NOTE_LIMIT, get_state
 from app.workflows.record_workflow import (
+    embed_text_chunks,
     execute_record_workflow,
     transcribe_voice_record,
 )
@@ -40,6 +42,28 @@ from app.workflows.record_workflow import (
 router = APIRouter(tags=["记录管理"])
 logger = logging.getLogger(__name__)
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+
+async def _read_upload(file: UploadFile, max_mb: int, language: str | None) -> bytes:
+    """读取上传内容，并在进入对象存储/ASR 前拦截超大文件。"""
+    max_bytes = max_mb * 1024 * 1024
+    if file.size is not None and file.size > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=t(language, "upload_too_large", limit=max_mb),
+        )
+    data = bytearray()
+    while len(data) <= max_bytes:
+        chunk = await file.read(min(1024 * 1024, max_bytes + 1 - len(data)))
+        if not chunk:
+            break
+        data.extend(chunk)
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=t(language, "upload_too_large", limit=max_mb),
+        )
+    return bytes(data)
 
 
 def _model_auth_error(language: str | None) -> HTTPException:
@@ -173,7 +197,7 @@ async def create_voice_record(
         )
 
     try:
-        file_data = await file.read()
+        file_data = await _read_upload(file, settings.MAX_AUDIO_UPLOAD_MB, language)
         result = await execute_record_workflow(
             user_id=user_id,
             conversation_id=conversation_id or "",
@@ -193,6 +217,8 @@ async def create_voice_record(
                 filename=file.filename or "audio.wav",
             )
         return _workflow_response(result, language)
+    except HTTPException:
+        raise
     except AuthenticationError as e:
         logger.exception("创建语音记录时模型服务认证失败")
         raise _model_auth_error(language) from e
@@ -218,7 +244,7 @@ async def create_image_record(
         raise HTTPException(status_code=400, detail=t(language, "image_required"))
 
     try:
-        file_data = await file.read()
+        file_data = await _read_upload(file, settings.MAX_IMAGE_UPLOAD_MB, language)
         result = await execute_record_workflow(
             user_id=user_id,
             conversation_id=conversation_id or "",
@@ -229,6 +255,8 @@ async def create_image_record(
             language=language,
         )
         return _workflow_response(result, language)
+    except HTTPException:
+        raise
     except AuthenticationError as e:
         logger.exception("创建图片记录时模型服务认证失败")
         raise _model_auth_error(language) from e
@@ -251,7 +279,7 @@ async def create_file_record(
 ):
     """上传普通附件记录。"""
     try:
-        file_data = await file.read()
+        file_data = await _read_upload(file, settings.MAX_FILE_UPLOAD_MB, language)
         if not file_data:
             raise HTTPException(
                 status_code=400, detail=t(language, "file_required")
@@ -359,9 +387,11 @@ async def update_record(
     record.updated_at = datetime.now(UTC)
 
     try:
-        vector = await EmbeddingService().embed(record.content)
-        record.vector_id = get_vector_client().upsert_record(
-            vector=vector,
+        embedded = await embed_text_chunks(EmbeddingService(), record.content)
+        vector_db = get_vector_client()
+        vector_db.delete_record(str(record.id), user_id)
+        record.vector_id = vector_db.upsert_chunks(
+            chunks=embedded,
             record_id=str(record.id),
             user_id=user_id,
         )
@@ -394,7 +424,7 @@ async def delete_record(
 
     if record.vector_id:
         try:
-            get_vector_client().delete(record.vector_id)
+            get_vector_client().delete_record(str(record.id), user_id)
         except Exception:
             logger.warning("删除记录向量失败: %s", record.id, exc_info=True)
 

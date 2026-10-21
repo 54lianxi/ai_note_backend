@@ -330,7 +330,7 @@ async def delete_account(
     for record in records:
         if record.vector_id:
             try:
-                get_vector_client().delete(record.vector_id)
+                get_vector_client().delete_record(str(record.id), user_id)
             except Exception:
                 logger.warning("注销账户删除向量失败: %s", record.vector_id, exc_info=True)
         for url in (record.image_url, record.file_url):

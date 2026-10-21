@@ -1,4 +1,4 @@
-"""清理 Qdrant 存量 payload，只保留 record_id 和 user_id。
+"""清理 Qdrant 存量 payload，只保留定位、用户隔离和分块编号字段。
 
 不会重新向量化，也不会改动 PostgreSQL。建议在切换到精简 payload 后执行一次：
 
@@ -10,8 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import settings  # noqa: E402
-from app.infrastructure.vector_db import get_vector_client, record_payload  # noqa: E402
+from app.config import settings
+from app.infrastructure.vector_db import get_vector_client, record_payload
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,6 +52,7 @@ def main() -> None:
                 payload=record_payload(
                     str(payload.get("record_id") or point.id),
                     str(user_id),
+                    chunk_index=payload.get("chunk_index"),
                 ),
             )
 

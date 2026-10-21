@@ -1,4 +1,5 @@
 """LangGraph 记录工作流 - 处理多模态输入并存储"""
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -13,7 +14,9 @@ from app.infrastructure.minio_client import get_minio_client
 from app.infrastructure.vector_db import get_vector_client
 from app.models.record import Record
 from app.services.asr_service import ASRService
+from app.services.document_service import extract_document_text
 from app.services.embedding_service import EmbeddingService
+from app.services.text_index import EMBED_BATCH_SIZE, split_text_chunks
 from app.services.vision_service import VisionService
 
 logger = logging.getLogger(__name__)
@@ -37,6 +40,7 @@ class RecordState:
     image_url: str = ""  # MinIO 图片 URL
     file_url: str = ""  # MinIO 通用附件 URL
     embedding_vector: list[float] = field(default_factory=list)
+    embedding_chunks: list[dict] = field(default_factory=list)
     summary: str = ""
     # 语音转写状态：done 已完成（或不需要转写）、pending 保存后由后台任务转写。
     transcription_status: str = "done"
@@ -147,7 +151,7 @@ async def process_image_node(state: RecordState) -> dict:
 
 
 async def process_file_node(state: RecordState) -> dict:
-    """处理普通附件：上传文件并建立可检索的元数据记录"""
+    """上传附件并抽取正文，正文供详情展示和 AI 检索使用。"""
     try:
         minio = get_minio_client()
         state.file_url = minio.upload_file(
@@ -159,8 +163,25 @@ async def process_file_node(state: RecordState) -> dict:
         logger.exception("附件上传对象存储失败，继续保存附件元数据")
 
     filename = state.filename.strip() or "未命名附件"
-    state.content = f"附件：{filename}"
-    state.summary = filename
+    try:
+        extracted = await asyncio.to_thread(
+            extract_document_text,
+            state.file_data or b"",
+            filename,
+            state.content_type_header,
+        )
+    except Exception:
+        logger.warning("文档正文抽取失败: %s", filename, exc_info=True)
+        extracted = ""
+
+    if extracted:
+        state.content = f"文件名：{filename}\n\n{extracted}"
+        state.summary = (
+            extracted[:100] + "..." if len(extracted) > 100 else extracted
+        )
+    else:
+        state.content = f"附件：{filename}"
+        state.summary = filename
     return {
         "file_url": state.file_url,
         "content": state.content,
@@ -168,25 +189,51 @@ async def process_file_node(state: RecordState) -> dict:
     }
 
 
+async def embed_text_chunks(
+    embedding: EmbeddingService,
+    text: str,
+) -> list[dict]:
+    chunks = split_text_chunks(text)
+    vectors: list[list[float]] = []
+    for index in range(0, len(chunks), EMBED_BATCH_SIZE):
+        vectors.extend(
+            await embedding.embed_batch(chunks[index : index + EMBED_BATCH_SIZE])
+        )
+    return [
+        {"text": chunk, "vector": vector}
+        for chunk, vector in zip(chunks, vectors, strict=True)
+    ]
+
+
 async def embed_node(state: RecordState) -> dict:
     """文本向量化。
 
     语音记录在后台转写完成前 content 为空，此时跳过向量化，等转写完成后再补。
     """
-    if not state.content.strip():
+    chunks = split_text_chunks(state.content)
+    if not chunks:
         state.embedding_vector = []
-        return {"embedding_vector": []}
+        state.embedding_chunks = []
+        return {"embedding_vector": [], "embedding_chunks": []}
 
     embedding = EmbeddingService()
     try:
-        vector = await embedding.embed(state.content)
+        embedded = await embed_text_chunks(embedding, state.content)
     except Exception as e:  # noqa: BLE001
         state.error = f"向量化失败: {e!s}"
         logger.warning("向量化失败，记录将不写入向量数据库: %s", e)
-        return {"embedding_vector": [], "error": state.error}
+        return {
+            "embedding_vector": [],
+            "embedding_chunks": [],
+            "error": state.error,
+        }
 
-    state.embedding_vector = vector
-    return {"embedding_vector": vector}
+    state.embedding_chunks = embedded
+    state.embedding_vector = embedded[0]["vector"] if embedded else []
+    return {
+        "embedding_vector": state.embedding_vector,
+        "embedding_chunks": state.embedding_chunks,
+    }
 
 
 async def store_node(state: RecordState) -> dict:
@@ -195,11 +242,11 @@ async def store_node(state: RecordState) -> dict:
     
     # 1. 写入向量数据库
     vector_id = None
-    if state.embedding_vector:
+    if state.embedding_chunks:
         try:
             vector_db = get_vector_client()
-            vector_id = vector_db.upsert_record(
-                vector=state.embedding_vector,
+            vector_id = vector_db.upsert_chunks(
+                chunks=state.embedding_chunks,
                 record_id=record_id,
                 user_id=state.user_id,
             )
@@ -346,9 +393,11 @@ async def transcribe_voice_record(
     vector_id = None
     if text:
         try:
-            vector = await EmbeddingService().embed(text)
-            vector_id = get_vector_client().upsert_record(
-                vector=vector,
+            embedded = await embed_text_chunks(EmbeddingService(), text)
+            vector_db = get_vector_client()
+            vector_db.delete_record(record_id, user_id)
+            vector_id = vector_db.upsert_chunks(
+                chunks=embedded,
                 record_id=record_id,
                 user_id=user_id,
             )
