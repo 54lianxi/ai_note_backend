@@ -2,16 +2,52 @@
 
 语言来自请求的 Accept-Language，认不出来的语言一律回落到默认语言。
 """
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import Depends, Header
 
-Language = Literal["zh", "en"]
+Language = str
 
 # 现有客户端没带 Accept-Language 时保持原行为。
 DEFAULT_LANGUAGE: Language = "zh"
 
-_SUPPORTED: tuple[str, ...] = ("zh", "en")
+_SUPPORTED: tuple[str, ...] = (
+    "en",
+    "zh",
+    "es",
+    "fr",
+    "de",
+    "pt",
+    "it",
+    "ja",
+    "ko",
+    "ru",
+    "ar",
+    "hi",
+    "id",
+    "tr",
+    "vi",
+    "th",
+)
+
+_LANGUAGE_NAMES = {
+    "en": "English",
+    "zh": "Simplified Chinese",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "pt": "Portuguese",
+    "it": "Italian",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "id": "Indonesian",
+    "tr": "Turkish",
+    "vi": "Vietnamese",
+    "th": "Thai",
+}
 
 
 def normalize_language(raw: str | None) -> Language:
@@ -24,7 +60,7 @@ def normalize_language(raw: str | None) -> Language:
             continue
         base = code.split("-")[0]
         if base in _SUPPORTED:
-            return base  # type: ignore[return-value]
+            return base
     return DEFAULT_LANGUAGE
 
 
@@ -68,7 +104,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "image_text": "图片文字：\n{text}",
         "image_description": "图片描述：\n{text}",
         "subscription_required": "该功能需要订阅后使用",
-        "subscription_rate_limit": "语音笔记已达免费上限（{limit} 条），订阅后不限量",
+        "subscription_rate_limit": "该类笔记已达免费上限（{limit} 项），订阅后不限量",
         "subscription_product_unknown": "订阅商品不匹配",
         "subscription_receipt_required": "缺少订阅凭证",
         "subscription_receipt_invalid": "订阅凭证无效或已过期",
@@ -105,7 +141,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "image_text": "Text in image:\n{text}",
         "image_description": "Image description:\n{text}",
         "subscription_required": "This feature requires a subscription",
-        "subscription_rate_limit": "You have reached the free limit of {limit} voice notes. Subscribe for unlimited notes",
+        "subscription_rate_limit": "You have reached the free limit of {limit} items in this category. Subscribe for unlimited notes",
         "subscription_product_unknown": "Subscription product mismatch",
         "subscription_receipt_required": "Missing subscription receipt",
         "subscription_receipt_invalid": "The subscription receipt is invalid or expired",
@@ -120,7 +156,11 @@ _MESSAGES: dict[str, dict[str, str]] = {
 def t(language: str | None, key: str, **kwargs: object) -> str:
     """取当前语言的文案，缺翻译时回落默认语言。"""
     lang = normalize_language(language)
-    template = _MESSAGES.get(lang, {}).get(key) or _MESSAGES[DEFAULT_LANGUAGE][key]
+    template = (
+        _MESSAGES.get(lang, {}).get(key)
+        or _MESSAGES["en"].get(key)
+        or _MESSAGES[DEFAULT_LANGUAGE][key]
+    )
     return template.format(**kwargs) if kwargs else template
 
 
@@ -184,7 +224,7 @@ def search_answer_prompts(
 ) -> tuple[str, str]:
     """返回 (system_prompt, user_prompt)，用用户的语言提问和作答。"""
     lang = normalize_language(language)
-    labels = _CONTEXT_LABELS[lang]
+    labels = _CONTEXT_LABELS.get(lang, _CONTEXT_LABELS["en"])
 
     parts = []
     for index, item in enumerate(results, 1):
@@ -200,7 +240,16 @@ def search_answer_prompts(
         f"{labels['records']}:\n{''.join(parts)}\n\n"
         f"{labels['ask']}"
     )
-    return _SEARCH_ANSWER_SYSTEM[lang], prompt
+    system_prompt = _SEARCH_ANSWER_SYSTEM.get(lang)
+    if system_prompt is None:
+        language_name = _LANGUAGE_NAMES.get(lang, lang)
+        system_prompt = (
+            _SEARCH_ANSWER_SYSTEM["en"].replace(
+                "Answer in English.",
+                f"Answer in {language_name} ({lang}).",
+            )
+        )
+    return system_prompt, prompt
 
 
 _VISION_SYSTEM = {
@@ -224,4 +273,12 @@ _VISION_SYSTEM = {
 
 
 def vision_system_prompt(language: str | None) -> str:
-    return _VISION_SYSTEM[normalize_language(language)]
+    lang = normalize_language(language)
+    prompt = _VISION_SYSTEM.get(lang)
+    if prompt is not None:
+        return prompt
+    language_name = _LANGUAGE_NAMES.get(lang, lang)
+    return _VISION_SYSTEM["en"].replace(
+        "written in English.",
+        f"written in {language_name} ({lang}).",
+    )

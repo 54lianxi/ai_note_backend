@@ -55,6 +55,12 @@ def _status_response(state) -> SubscriptionStatusResponse:
         voice_note_count=state.voice_note_count,
         voice_note_limit=state.voice_note_limit,
         can_create_voice_note=state.can_create_voice_note,
+        image_note_count=state.image_note_count,
+        image_note_limit=state.image_note_limit,
+        can_create_image_note=state.can_create_image_note,
+        file_note_count=state.file_note_count,
+        file_note_limit=state.file_note_limit,
+        can_create_file_note=state.can_create_file_note,
     )
 
 
@@ -77,7 +83,10 @@ async def verify_subscription(
     language: LanguageDep,
 ):
     """购买 / 续订后上报凭证，后端落库并返回最新订阅状态。"""
-    if data.product_id != settings.SUBSCRIPTION_PRODUCT_ID:
+    if data.product_id not in {
+        settings.SUBSCRIPTION_WEEKLY_PRODUCT_ID,
+        settings.SUBSCRIPTION_MONTHLY_PRODUCT_ID,
+    }:
         raise HTTPException(
             status_code=400, detail=t(language, "subscription_product_unknown")
         )

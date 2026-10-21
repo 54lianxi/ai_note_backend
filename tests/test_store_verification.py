@@ -11,7 +11,7 @@ from app.services.store_verification import (
 )
 
 NOW = datetime(2026, 10, 19, 8, 0, tzinfo=UTC)
-PRODUCT_ID = "note_subscription_0.99"
+PRODUCT_ID = "note_sub_month_2.99"
 
 
 def _payload(

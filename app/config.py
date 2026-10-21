@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     APP_MIN_VERSION: str = ""  # 填了比它低的版本会强制更新
     APP_UPDATE_URL: str = ""  # APK 或应用商店地址
     APP_UPDATE_NOTE: str = ""  # 更新说明
+    # 首次请求某语言时生成的 UI 语言包缓存目录。
+    LANGUAGE_PACK_CACHE_DIR: str = "/tmp/ai-record-language-packs"
 
     # 上传大小硬限制。前端会在请求前先校验；这里防止绕过客户端直传超大资源。
     # 64MB 可容纳约 2 小时 19 分钟的 64kbps 录音；nginx 需同步放宽到 70MB。
@@ -149,11 +151,13 @@ class Settings(BaseSettings):
     REVIEW_LOGIN_ENABLED: bool = Field(default=True)
     REVIEW_ACCESS_CODE: str = Field(default="")
 
-    # 订阅（应用内购买）。
-    # 商店商品 ID：App Store Connect 与 Google Play Console 里都用同一个。
-    SUBSCRIPTION_PRODUCT_ID: str = Field(default="note_subscription_0.99")
-    # 未订阅用户最多能保存多少条语音笔记。
-    SUBSCRIPTION_FREE_VOICE_LIMIT: int = Field(default=5)
+    # 订阅（应用内购买）。App Store Connect 与 Google Play Console 使用相同 ID。
+    SUBSCRIPTION_WEEKLY_PRODUCT_ID: str = Field(default="note_sub_week_0.99")
+    SUBSCRIPTION_MONTHLY_PRODUCT_ID: str = Field(default="note_sub_month_2.99")
+    # 免费用户的分类额度。录音与上传音频都记为 voice。
+    SUBSCRIPTION_FREE_VOICE_LIMIT: int = Field(default=3, gt=0)
+    SUBSCRIPTION_FREE_IMAGE_LIMIT: int = Field(default=3, gt=0)
+    SUBSCRIPTION_FREE_FILE_LIMIT: int = Field(default=1, gt=0)
     # 仅本地开发免校验时使用，按多少天授予订阅。
     SUBSCRIPTION_FALLBACK_DAYS: int = Field(default=31)
     # 是否启用商店服务端校验。生产环境必须保持 true；关闭后接口会拒绝

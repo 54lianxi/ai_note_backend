@@ -65,6 +65,30 @@ AI_HTTP_PROXY=
 ASR_REALTIME_PROXY=
 ```
 
+## 免费额度与订阅
+
+未订阅用户按类型单独计数：音频/录音合计 3 段、图片 3 张、文档 1 篇。
+周订阅和月订阅的权益一致，商品 ID 分别为：
+
+```dotenv
+SUBSCRIPTION_WEEKLY_PRODUCT_ID=note_sub_week_0.99
+SUBSCRIPTION_MONTHLY_PRODUCT_ID=note_sub_month_2.99
+```
+
+商店后台必须创建这两个自动续订商品，并让后端和客户端使用完全相同的 ID。
+
+## 多语言语言包
+
+App 内置英文和简体中文作为离线兜底，并支持西班牙语、法语、德语、葡萄牙语、
+意大利语、日语、韩语、俄语、阿拉伯语、印地语、印尼语、土耳其语、越南语和泰语。
+首次使用某语言时，客户端请求 `GET /api/v1/app/language-packs/{language}`，
+服务端生成并缓存完整语言包；后续启动直接读本地缓存。
+
+缓存目录默认是 `/tmp/ai-record-language-packs`，可通过
+`LANGUAGE_PACK_CACHE_DIR` 改到持久卷。首次生成某种语言需要配置
+`LLM_API_KEY`；也可以提前请求一次，把生成结果放进
+`backend/app/static/language_packs/`，避免上线后首次请求等待。
+
 ## 部署：nginx 必须放宽请求体大小限制
 
 语音笔记、图片、附件上传接口默认走 nginx 反代，而 nginx 的 `client_max_body_size`

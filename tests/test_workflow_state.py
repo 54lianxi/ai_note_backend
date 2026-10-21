@@ -121,17 +121,26 @@ async def test_process_voice_node_uses_client_transcript(monkeypatch):
         def __init__(self):
             raise AssertionError("已有转写文本时不应该再调 ASR")
 
+    class FakeLlmService:
+        async def summarize_record(self, text, language):
+            assert text == "今天的会议记录"
+            assert language == "zh"
+            return "会议内容已记录。"
+
     monkeypatch.setattr(record_module, "ASRService", FailingAsrService)
+    monkeypatch.setattr(record_module, "LLMService", FakeLlmService)
 
     state = record_module.RecordState(
         user_id="00000000-0000-0000-0000-000000000001",
         content_type="voice",
         content="  今天的会议记录  ",
+        language="zh",
     )
 
     result = await record_module.process_voice_node(state)
 
     assert result["content"] == "今天的会议记录"
+    assert result["summary"] == "会议内容已记录。"
     assert result["transcription_status"] == "done"
 
 
@@ -199,7 +208,7 @@ def _patch_voice_pipeline(monkeypatch, *, transcript, summary):
     """把后台转写依赖的服务全部换成假实现。"""
 
     class FakeAsr:
-        async def transcribe_with_summary(self, _data, _filename):
+        async def transcribe_with_summary(self, _data, _filename, **_kwargs):
             if isinstance(transcript, Exception):
                 raise transcript
             return {"text": transcript, "summary": summary}

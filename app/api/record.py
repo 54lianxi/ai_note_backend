@@ -32,7 +32,13 @@ from app.schemas.record import (
 )
 from app.services.asr_service import ASRServiceError
 from app.services.embedding_service import EmbeddingService
-from app.services.subscription_service import FREE_VOICE_NOTE_LIMIT, get_state
+from app.services.llm_service import LLMService
+from app.services.subscription_service import (
+    FREE_FILE_NOTE_LIMIT,
+    FREE_IMAGE_NOTE_LIMIT,
+    FREE_VOICE_NOTE_LIMIT,
+    get_state,
+)
 from app.workflows.record_workflow import (
     embed_text_chunks,
     execute_record_workflow,
@@ -184,7 +190,7 @@ async def create_voice_record(
     保存请求只做存储：客户端带转写文本（实时转写）时直接入库；否则先落库并把
     转写交给后台任务，保存接口立刻返回，不再把 ASR 耗时算进「保存笔记」。
 
-    免费用户最多保存 5 条语音笔记，超出时返回 402，客户端据此引导订阅。
+    免费用户最多保存 3 段音频笔记，超出时返回 402，客户端据此引导订阅。
     """
     if not file.content_type or not file.content_type.startswith("audio"):
         raise HTTPException(status_code=400, detail=t(language, "audio_required"))
@@ -215,6 +221,7 @@ async def create_voice_record(
                 user_id=user_id,
                 file_data=file_data,
                 filename=file.filename or "audio.wav",
+                language=language,
             )
         return _workflow_response(result, language)
     except HTTPException:
@@ -235,6 +242,7 @@ async def create_voice_record(
 @router.post("/records/image", response_model=RecordResponse)
 async def create_image_record(
     file: Annotated[UploadFile, File(...)],
+    db: DbSession,
     user_id: CurrentUserId,
     language: LanguageDep,
     conversation_id: Annotated[str | None, Form()] = None,
@@ -242,6 +250,13 @@ async def create_image_record(
     """上传图片记录。视觉识别失败时仍保留图片附件记录。"""
     if not file.content_type or not file.content_type.startswith("image"):
         raise HTTPException(status_code=400, detail=t(language, "image_required"))
+
+    state = await get_state(db, user_id)
+    if not state.can_create_image_note:
+        raise HTTPException(
+            status_code=402,
+            detail=t(language, "subscription_rate_limit", limit=FREE_IMAGE_NOTE_LIMIT),
+        )
 
     try:
         file_data = await _read_upload(file, settings.MAX_IMAGE_UPLOAD_MB, language)
@@ -273,11 +288,19 @@ async def create_image_record(
 @router.post("/records/file", response_model=RecordResponse)
 async def create_file_record(
     file: Annotated[UploadFile, File(...)],
+    db: DbSession,
     user_id: CurrentUserId,
     language: LanguageDep,
     conversation_id: Annotated[str | None, Form()] = None,
 ):
     """上传普通附件记录。"""
+    state = await get_state(db, user_id)
+    if not state.can_create_file_note:
+        raise HTTPException(
+            status_code=402,
+            detail=t(language, "subscription_rate_limit", limit=FREE_FILE_NOTE_LIMIT),
+        )
+
     try:
         file_data = await _read_upload(file, settings.MAX_FILE_UPLOAD_MB, language)
         if not file_data:
@@ -378,11 +401,25 @@ async def update_record(
         )
 
     record.content = data.content.strip()
-    record.summary = (
-        data.summary.strip()
-        if data.summary is not None and data.summary.strip()
-        else record.content[:100] + ("..." if len(record.content) > 100 else "")
-    )
+    if data.summary is not None and data.summary.strip():
+        record.summary = data.summary.strip()
+    elif record.content_type == "voice":
+        try:
+            record.summary = await LLMService().summarize_record(
+                record.content,
+                language,
+            )
+        except Exception:
+            logger.warning("编辑语音后重新生成摘要失败: %s", record.id, exc_info=True)
+            record.summary = (
+                record.content[:100] + "..."
+                if len(record.content) > 100
+                else None
+            )
+    else:
+        record.summary = record.content[:100] + (
+            "..." if len(record.content) > 100 else ""
+        )
     # 统一按 UTC 存储，交给前端按本地时区展示。
     record.updated_at = datetime.now(UTC)
 

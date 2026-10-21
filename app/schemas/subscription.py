@@ -16,6 +16,12 @@ class SubscriptionStatusResponse(BaseModel):
     voice_note_count: int = 0
     voice_note_limit: int | None = None
     can_create_voice_note: bool = True
+    image_note_count: int = 0
+    image_note_limit: int | None = None
+    can_create_image_note: bool = True
+    file_note_count: int = 0
+    file_note_limit: int | None = None
+    can_create_file_note: bool = True
 
 
 class VerifySubscriptionRequest(BaseModel):

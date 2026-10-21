@@ -1,5 +1,4 @@
 """ASR 语音识别服务"""
-import base64
 import io
 import logging
 
@@ -8,6 +7,7 @@ from openai import AsyncOpenAI
 
 from app.config import settings
 from app.core.http import build_async_client
+from app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ class ASRService:
                 response_format="text",
                 **params,
             )
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             raise ASRServiceError(f"语音识别请求失败: {error}") from error
 
         return str(response).strip()
@@ -203,15 +203,26 @@ class ASRService:
                 return mime
         return "audio/wav"
 
-    async def transcribe_with_summary(self, audio_data: bytes, filename: str = "audio.wav") -> dict:
+    async def transcribe_with_summary(
+        self,
+        audio_data: bytes,
+        filename: str = "audio.wav",
+        language: str | None = None,
+    ) -> dict:
         """
         语音转文字并生成摘要
         :return: {"text": "原始文本", "summary": "摘要"}
         """
         text = await self.transcribe(audio_data, filename)
-
-        # 生成简短摘要（取前100字）
-        summary = text[:100] + "..." if len(text) > 100 else text
+        summary = ""
+        if text:
+            try:
+                summary = await LLMService().summarize_record(text, language)
+            except Exception:
+                # 摘要失败不能影响录音和转写保存；长文本保留开头供回看。
+                logger.warning("语音摘要生成失败", exc_info=True)
+                if len(text) > 100:
+                    summary = f"{text[:100]}..."
 
         return {
             "text": text,

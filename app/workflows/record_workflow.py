@@ -16,6 +16,7 @@ from app.models.record import Record
 from app.services.asr_service import ASRService
 from app.services.document_service import extract_document_text
 from app.services.embedding_service import EmbeddingService
+from app.services.llm_service import LLMService
 from app.services.text_index import EMBED_BATCH_SIZE, split_text_chunks
 from app.services.vision_service import VisionService
 
@@ -81,7 +82,11 @@ async def process_voice_node(state: RecordState) -> dict:
 
     if state.content.strip():
         text = state.content.strip()
-        summary = text[:100] + "..." if len(text) > 100 else text
+        try:
+            summary = await LLMService().summarize_record(text, state.language)
+        except Exception:
+            logger.warning("实时转写语音摘要生成失败", exc_info=True)
+            summary = f"{text[:100]}..." if len(text) > 100 else ""
         status = "done"
     else:
         text = ""
@@ -373,6 +378,7 @@ async def transcribe_voice_record(
     user_id: str,
     file_data: bytes,
     filename: str,
+    language: str | None = None,
 ) -> None:
     """保存语音记录后的后台转写：ASR → 向量化 → 回写记录。
 
@@ -383,7 +389,11 @@ async def transcribe_voice_record(
     text = ""
     summary: str | None = None
     try:
-        result = await ASRService().transcribe_with_summary(file_data, filename)
+        result = await ASRService().transcribe_with_summary(
+            file_data,
+            filename,
+            language=language,
+        )
         text = (result.get("text") or "").strip()
         summary = result.get("summary") or None
     except Exception:

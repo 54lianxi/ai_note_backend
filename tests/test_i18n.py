@@ -18,9 +18,10 @@ from app.core.i18n import (
         ("en-US,en;q=0.9,zh;q=0.8", "en"),
         ("zh-CN,zh;q=0.9", "zh"),
         ("EN-gb", "en"),
+        ("ja-JP,ja;q=0.9", "ja"),
+        ("fr", "fr"),
         # 不支持的语言回落到默认语言
-        ("ja-JP,ja;q=0.9", DEFAULT_LANGUAGE),
-        ("fr", DEFAULT_LANGUAGE),
+        ("nl-NL,nl;q=0.9", DEFAULT_LANGUAGE),
     ],
 )
 def test_normalize_language(raw, expected):
@@ -33,7 +34,7 @@ def test_t_uses_requested_language():
 
 
 def test_t_falls_back_to_default_language():
-    assert t("ja", "record_not_found") == t(DEFAULT_LANGUAGE, "record_not_found")
+    assert t("ja", "record_not_found") == t("en", "record_not_found")
 
 
 def test_t_formats_placeholders():
@@ -57,3 +58,4 @@ def test_search_answer_prompts_follow_language():
 def test_vision_prompt_follows_language():
     assert "English" in vision_system_prompt("en")
     assert "中文" in vision_system_prompt("zh")
+    assert "Japanese (ja)" in vision_system_prompt("ja")

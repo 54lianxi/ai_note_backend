@@ -2,7 +2,7 @@
 
 免费用户：
 - 不能使用语音笔记的实时转写、AI 对话的语音输入（由客户端与实时转写接口拦截）；
-- 最多保存 5 条语音笔记；
+- 最多保存 3 段录音/上传音频、3 张图片、1 篇文档；
 - 会看到广告（客户端展示）。
 订阅用户：以上全部解锁。
 """
@@ -25,8 +25,10 @@ from app.services.store_verification import (
 
 logger = logging.getLogger(__name__)
 
-# 未订阅用户最多能保存多少条语音笔记。
+# 未订阅用户的分类额度。
 FREE_VOICE_NOTE_LIMIT = settings.SUBSCRIPTION_FREE_VOICE_LIMIT
+FREE_IMAGE_NOTE_LIMIT = settings.SUBSCRIPTION_FREE_IMAGE_LIMIT
+FREE_FILE_NOTE_LIMIT = settings.SUBSCRIPTION_FREE_FILE_LIMIT
 
 
 @dataclass(frozen=True)
@@ -40,12 +42,22 @@ class SubscriptionState:
     auto_renewing: bool
     voice_note_count: int
     voice_note_limit: int | None  # None 表示不限量
+    image_note_count: int
+    image_note_limit: int | None
+    file_note_count: int
+    file_note_limit: int | None
 
     @property
     def can_create_voice_note(self) -> bool:
-        if self.is_subscribed:
-            return True
-        return self.voice_note_count < FREE_VOICE_NOTE_LIMIT
+        return self.is_subscribed or self.voice_note_count < FREE_VOICE_NOTE_LIMIT
+
+    @property
+    def can_create_image_note(self) -> bool:
+        return self.is_subscribed or self.image_note_count < FREE_IMAGE_NOTE_LIMIT
+
+    @property
+    def can_create_file_note(self) -> bool:
+        return self.is_subscribed or self.file_note_count < FREE_FILE_NOTE_LIMIT
 
 
 class SubscriptionTokenInUse(Exception):
@@ -91,16 +103,21 @@ async def get_subscription(
     return result.scalar_one_or_none()
 
 
-async def count_voice_notes(
-    db: AsyncSession, user_id: str | uuid.UUID
+async def count_notes_by_type(
+    db: AsyncSession,
+    user_id: str | uuid.UUID,
+    content_type: str,
 ) -> int:
-    """已经保存的语音笔记条数（待同步的离线笔记不计入）。"""
+    """已经保存的某类笔记条数（待同步的离线笔记不计入）。"""
     uid = user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(user_id)
     return (
         await db.execute(
             select(func.count())
             .select_from(Record)
-            .where(Record.user_id == uid, Record.content_type == "voice")
+            .where(
+                Record.user_id == uid,
+                Record.content_type == content_type,
+            )
         )
     ).scalar_one()
 
@@ -109,7 +126,9 @@ async def get_state(db: AsyncSession, user_id: str | uuid.UUID) -> SubscriptionS
     """汇总订阅状态 + 免费额度用量，供接口和限额判断共用。"""
     subscription = await get_subscription(db, user_id)
     active = _is_active(subscription, datetime.now(UTC))
-    count = await count_voice_notes(db, user_id)
+    voice_count = await count_notes_by_type(db, user_id, "voice")
+    image_count = await count_notes_by_type(db, user_id, "image")
+    file_count = await count_notes_by_type(db, user_id, "file")
     return SubscriptionState(
         is_subscribed=active,
         # 未验证 / 已失效的记录只用于内部排查，不把过期信息当成有效权益返回。
@@ -117,8 +136,12 @@ async def get_state(db: AsyncSession, user_id: str | uuid.UUID) -> SubscriptionS
         platform=subscription.platform if active else None,
         expires_at=subscription.expires_at if active else None,
         auto_renewing=bool(subscription.auto_renewing) if active else False,
-        voice_note_count=count,
+        voice_note_count=voice_count,
         voice_note_limit=None if active else FREE_VOICE_NOTE_LIMIT,
+        image_note_count=image_count,
+        image_note_limit=None if active else FREE_IMAGE_NOTE_LIMIT,
+        file_note_count=file_count,
+        file_note_limit=None if active else FREE_FILE_NOTE_LIMIT,
     )
 
 

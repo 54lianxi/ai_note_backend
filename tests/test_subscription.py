@@ -14,6 +14,8 @@ from app.services.store_verification import (
     VerifiedSubscription,
 )
 from app.services.subscription_service import (
+    FREE_FILE_NOTE_LIMIT,
+    FREE_IMAGE_NOTE_LIMIT,
     FREE_VOICE_NOTE_LIMIT,
     SubscriptionState,
     _is_active,
@@ -30,13 +32,19 @@ def _state(**overrides) -> SubscriptionState:
         "auto_renewing": False,
         "voice_note_count": 0,
         "voice_note_limit": FREE_VOICE_NOTE_LIMIT,
+        "image_note_count": 0,
+        "image_note_limit": FREE_IMAGE_NOTE_LIMIT,
+        "file_note_count": 0,
+        "file_note_limit": FREE_FILE_NOTE_LIMIT,
     }
     base.update(overrides)
     return SubscriptionState(**base)
 
 
 def test_free_limit_matches_config():
-    assert FREE_VOICE_NOTE_LIMIT == settings.SUBSCRIPTION_FREE_VOICE_LIMIT == 5
+    assert FREE_VOICE_NOTE_LIMIT == settings.SUBSCRIPTION_FREE_VOICE_LIMIT == 3
+    assert FREE_IMAGE_NOTE_LIMIT == settings.SUBSCRIPTION_FREE_IMAGE_LIMIT == 3
+    assert FREE_FILE_NOTE_LIMIT == settings.SUBSCRIPTION_FREE_FILE_LIMIT == 1
 
 
 def test_free_user_can_create_until_reaching_limit():
@@ -52,6 +60,24 @@ def test_subscribed_user_has_no_limit():
         voice_note_count=FREE_VOICE_NOTE_LIMIT * 10,
     )
     assert state.can_create_voice_note
+    assert state.can_create_image_note
+    assert state.can_create_file_note
+
+
+def test_image_and_document_limits_are_independent():
+    state = _state(
+        voice_note_count=FREE_VOICE_NOTE_LIMIT,
+        image_note_count=FREE_IMAGE_NOTE_LIMIT - 1,
+        file_note_count=FREE_FILE_NOTE_LIMIT,
+    )
+    assert not state.can_create_voice_note
+    assert state.can_create_image_note
+    assert not state.can_create_file_note
+
+
+def test_subscription_has_two_product_ids():
+    assert settings.SUBSCRIPTION_WEEKLY_PRODUCT_ID == "note_sub_week_0.99"
+    assert settings.SUBSCRIPTION_MONTHLY_PRODUCT_ID == "note_sub_month_2.99"
 
 
 def test_limit_message_includes_number():
@@ -78,7 +104,7 @@ def test_subscription_messages_exist_in_both_languages():
 def _subscription(**overrides) -> Subscription:
     values = {
         "user_id": uuid.uuid4(),
-        "product_id": "note_subscription_0.99",
+        "product_id": "note_sub_month_2.99",
         "platform": "android",
         "purchase_token": "purchase-token",
         "status": "active",
