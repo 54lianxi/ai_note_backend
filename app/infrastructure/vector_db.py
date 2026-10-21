@@ -1,5 +1,4 @@
 """Qdrant 向量数据库客户端"""
-from uuid import uuid4
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -13,6 +12,11 @@ from qdrant_client.models import (
 )
 
 from app.config import settings
+
+
+def record_payload(record_id: str, user_id: str) -> dict[str, str]:
+    """Qdrant 只保存定位记录和隔离用户检索所需的字段。"""
+    return {"record_id": record_id, "user_id": user_id}
 
 
 class VectorDBClient:
@@ -54,34 +58,31 @@ class VectorDBClient:
                 field_schema=PayloadSchemaType.KEYWORD,
             )
     
-    def upsert(
+    def upsert_record(
         self,
         vector: list[float],
-        payload: dict,
-        point_id: str | None = None,
+        record_id: str,
+        user_id: str,
     ) -> str:
         """
-        插入或更新向量
+        插入或更新记录向量
         :param vector: 向量数据
-        :param payload: 附加元数据
-        :param point_id: 自定义 ID（可选）
-        :return: point_id
+        :param record_id: PostgreSQL 记录 ID，同时作为 Qdrant point ID
+        :param user_id: 用户 ID，用于检索时隔离数据
+        :return: record_id
         """
-        if point_id is None:
-            point_id = str(uuid4())
-        
         # Qdrant 使用整数或 UUID 作为 point ID
         self.client.upsert(
             collection_name=self.collection,
             points=[
                 PointStruct(
-                    id=point_id,
+                    id=record_id,
                     vector=vector,
-                    payload=payload,
+                    payload=record_payload(record_id, user_id),
                 )
             ],
         )
-        return point_id
+        return record_id
     
     def search(
         self,

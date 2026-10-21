@@ -1,5 +1,18 @@
 # ai_note_backend
 
+## 数据边界：PostgreSQL 是唯一主数据源
+
+Qdrant 只保存记录向量、`record_id` 和检索隔离所需的 `user_id`，不保存笔记
+原文、摘要或附件信息。检索先由 Qdrant 返回记录 ID 和相似度，再从 PostgreSQL
+读取完整内容。
+
+切换后，存量 Qdrant payload 可用下面的脚本清理；脚本只覆盖 payload，不会重新
+向量化，也不会修改 PostgreSQL：
+
+```bash
+uv run python scripts/compact_qdrant_payloads.py
+```
+
 ## 部署：nginx 反代必须放行 WebSocket
 
 实时语音转写走 `wss://<域名>/api/v1/records/voice/realtime`。nginx 默认不转发
@@ -131,6 +144,9 @@ iOS 目前还没接 App Store Server API，`platform=ios` 会返回 400。这是
 REVIEW_LOGIN_ENABLED=true
 REVIEW_ACCESS_CODE=换成足够长的随机字符串
 ```
+
+配置默认从 `backend/.env` 读取；生产环境可以用 `ENV_FILE=.env.prod`
+切换配置文件，环境变量本身仍优先于文件值。
 
 审核员在登录页连续点副标题 5 次后输入该访问码。访问码只放在 Play Console
 的 App access 说明里，不要写进客户端代码。

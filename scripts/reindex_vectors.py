@@ -24,7 +24,7 @@ from app.services.embedding_service import EmbeddingService  # noqa: E402
 
 # asyncpg 不认 SQLAlchemy 的 driver 前缀和 asyncpg 方言参数。
 _SELECT = """
-    SELECT id, user_id, content, summary, content_type, created_at
+    SELECT id, user_id, content
     FROM records
     ORDER BY created_at
 """
@@ -60,17 +60,10 @@ async def main() -> int:
         record_id = str(row["id"])
         try:
             vector = await embedding.embed(row["content"])
-            vector_db.upsert(
+            vector_db.upsert_record(
                 vector=vector,
-                payload={
-                    "record_id": record_id,
-                    "user_id": str(row["user_id"]),
-                    "content": row["content"],
-                    "summary": row["summary"],
-                    "content_type": row["content_type"],
-                    "created_at": row["created_at"].isoformat(),
-                },
-                point_id=record_id,
+                record_id=record_id,
+                user_id=str(row["user_id"]),
             )
             ok += 1
             print(f"  [{index}/{len(rows)}] ok   {row['content'][:30]}")

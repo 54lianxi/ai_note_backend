@@ -16,6 +16,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from app.config import settings
+from app.infrastructure.vector_db import record_payload
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,12 +76,23 @@ def main() -> None:
         if not points:
             break
 
+        migrated_points = []
+        for point in points:
+            payload = point.payload or {}
+            user_id = payload.get("user_id")
+            if not user_id:
+                raise SystemExit(f"point {point.id} 缺少 user_id，已停止迁移")
+            migrated_points.append(
+                PointStruct(
+                    id=point.id,
+                    vector=point.vector,
+                    payload=record_payload(str(payload.get("record_id") or point.id), str(user_id)),
+                )
+            )
+
         target.upsert(
             collection_name=args.collection,
-            points=[
-                PointStruct(id=point.id, vector=point.vector, payload=point.payload)
-                for point in points
-            ],
+            points=migrated_points,
         )
         migrated += len(points)
         print(f"[migrate] 已写入 {migrated}/{source_count}")

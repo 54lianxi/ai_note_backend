@@ -198,17 +198,10 @@ async def store_node(state: RecordState) -> dict:
     if state.embedding_vector:
         try:
             vector_db = get_vector_client()
-            vector_id = vector_db.upsert(
+            vector_id = vector_db.upsert_record(
                 vector=state.embedding_vector,
-                payload={
-                    "record_id": record_id,
-                    "user_id": state.user_id,
-                    "content": state.content,
-                    "summary": state.summary,
-                    "content_type": state.content_type,
-                    "created_at": datetime.now(UTC).isoformat(),
-                },
-                point_id=record_id,
+                record_id=record_id,
+                user_id=state.user_id,
             )
         except Exception as e:
             state.error = f"向量数据库写入失败: {e!s}"
@@ -354,17 +347,10 @@ async def transcribe_voice_record(
     if text:
         try:
             vector = await EmbeddingService().embed(text)
-            vector_id = get_vector_client().upsert(
+            vector_id = get_vector_client().upsert_record(
                 vector=vector,
-                payload={
-                    "record_id": record_id,
-                    "user_id": user_id,
-                    "content": text,
-                    "summary": summary or "",
-                    "content_type": "voice",
-                    "created_at": datetime.now(UTC).isoformat(),
-                },
-                point_id=record_id,
+                record_id=record_id,
+                user_id=user_id,
             )
         except Exception:
             logger.warning("语音记录后台向量化失败，record_id=%s", record_id, exc_info=True)

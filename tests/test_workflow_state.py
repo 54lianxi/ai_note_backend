@@ -191,7 +191,7 @@ def _patch_voice_pipeline(monkeypatch, *, transcript, summary):
             return [0.1, 0.2]
 
     class FakeVectorClient:
-        def upsert(self, **_kwargs):
+        def upsert_record(self, **_kwargs):
             return "vector-id"
 
     monkeypatch.setattr(record_module, "ASRService", FakeAsr)

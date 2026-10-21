@@ -360,24 +360,11 @@ async def update_record(
 
     try:
         vector = await EmbeddingService().embed(record.content)
-        vector_id = str(record.id)
-        get_vector_client().upsert(
+        record.vector_id = get_vector_client().upsert_record(
             vector=vector,
-            payload={
-                "record_id": str(record.id),
-                "user_id": user_id,
-                "content": record.content,
-                "summary": record.summary,
-                "content_type": record.content_type,
-                "created_at": (
-                    ensure_utc(record.created_at).isoformat()
-                    if record.created_at
-                    else None
-                ),
-            },
-            point_id=vector_id,
+            record_id=str(record.id),
+            user_id=user_id,
         )
-        record.vector_id = vector_id
     except Exception:
         logger.warning("编辑记录后刷新向量失败: %s", record.id, exc_info=True)
 
