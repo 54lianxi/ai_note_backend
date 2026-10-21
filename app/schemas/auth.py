@@ -26,6 +26,7 @@ class AuthUserResponse(BaseModel):
     """登录用户信息"""
     id: uuid.UUID
     username: str
+    display_name: str | None = None
     email: str | None = None
 
 

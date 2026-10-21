@@ -1,4 +1,7 @@
 import io
+import subprocess
+import sys
+from pathlib import Path
 
 from docx import Document
 from openpyxl import Workbook
@@ -63,3 +66,24 @@ def test_extracts_pptx_text():
 
 def test_unknown_binary_returns_empty_text():
     assert extract_document_text(b"\x00\x01\x02", "legacy.doc") == ""
+
+
+def test_document_libraries_are_loaded_only_when_needed():
+    """缺文档解析依赖时应让服务启动，而不是在 import app.main 时崩溃。"""
+    code = """
+import sys
+for module in ("docx", "openpyxl", "pptx", "pypdf"):
+    sys.modules[module] = None
+import app.main
+print("ok")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout

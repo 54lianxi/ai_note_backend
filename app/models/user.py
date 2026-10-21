@@ -16,6 +16,7 @@ class User(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
     # Google/Apple 登录带回来的邮箱，没拿到时为空。
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -86,6 +86,9 @@ async def init_db():
         await conn.execute(text(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)"
         ))
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(100)"
+        ))
         # 订阅记录补“最近一次商店校验时间”。修复前的老数据为空，
         # 重新校验通过之前不会授予订阅权益。
         await conn.execute(text(

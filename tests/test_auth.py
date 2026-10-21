@@ -73,6 +73,15 @@ def test_user_model_stores_login_email():
     assert column.type.length == 255
 
 
+def test_user_model_stores_provider_display_name():
+    from app.models.user import User
+
+    column = User.__table__.columns["display_name"]
+
+    assert column.nullable is True
+    assert column.type.length == 100
+
+
 def test_access_token_contains_user_subject():
     user_id = str(_apple_user_id("001234.abcdef"))
 

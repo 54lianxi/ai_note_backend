@@ -174,6 +174,7 @@ async def sign_in_with_apple(
         raise HTTPException(status_code=401, detail="Apple identity token 缺少用户标识")
 
     email = data.email or payload.get("email")
+    display_name = (data.full_name or payload.get("name") or "").strip() or None
     user_id = _apple_user_id(str(apple_sub))
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -182,6 +183,7 @@ async def sign_in_with_apple(
         user = User(
             id=user_id,
             username=_apple_username(str(apple_sub)),
+            display_name=display_name,
             hashed_password="apple-sign-in",
             email=email,
         )
@@ -190,6 +192,8 @@ async def sign_in_with_apple(
     elif email and user.email != email:
         # Apple 只在首次授权返回邮箱，之后要沿用库里存的值。
         user.email = email
+    if display_name and user.display_name != display_name:
+        user.display_name = display_name
 
     access_token = create_access_token({"sub": str(user.id)})
     return AuthResponse(
@@ -197,6 +201,7 @@ async def sign_in_with_apple(
         user=AuthUserResponse(
             id=user.id,
             username=user.username,
+            display_name=user.display_name,
             email=user.email,
         ),
     )
@@ -211,6 +216,11 @@ async def sign_in_with_google(
     payload = await GoogleIdentityVerifier().verify(data.identity_token)
     google_sub = str(payload["sub"])
     email = payload.get("email")
+    display_name = (
+        payload.get("name")
+        or payload.get("given_name")
+        or (str(email).split("@", 1)[0] if email else "")
+    ).strip() or None
     user_id = _google_user_id(google_sub)
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -219,6 +229,7 @@ async def sign_in_with_google(
         user = User(
             id=user_id,
             username=_google_username(google_sub),
+            display_name=display_name,
             hashed_password="google-sign-in",
             email=email,
         )
@@ -226,6 +237,8 @@ async def sign_in_with_google(
         await db.flush()
     elif email and user.email != email:
         user.email = email
+    if display_name and user.display_name != display_name:
+        user.display_name = display_name
 
     access_token = create_access_token({"sub": str(user.id)})
     return AuthResponse(
@@ -233,6 +246,7 @@ async def sign_in_with_google(
         user=AuthUserResponse(
             id=user.id,
             username=user.username,
+            display_name=user.display_name,
             email=user.email,
         ),
     )
@@ -295,6 +309,7 @@ async def sign_in_as_review_account(
         user=AuthUserResponse(
             id=user.id,
             username=user.username,
+            display_name=user.display_name,
             email=user.email,
         ),
     )

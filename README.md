@@ -1,5 +1,24 @@
 # ai_note_backend
 
+## 部署：先安装完整依赖，再重启服务
+
+更新代码后必须在服务器虚拟环境中重新安装 `requirements.txt`。文档解析依赖是按
+文件格式懒加载的，缺依赖不会再拖垮整个 API，但对应格式也无法抽取正文：
+
+```bash
+cd /apps/ai-record
+venv/bin/python -m pip install -r requirements.txt
+venv/bin/python -c "import app.main; print('app import ok')"
+sudo systemctl restart ai-record-backend
+sudo journalctl -u ai-record-backend -n 50 --no-pager
+```
+
+如果日志出现 `ModuleNotFoundError`，先用同一个 `venv/bin/python` 检查：
+
+```bash
+venv/bin/python -c "import docx, openpyxl, pptx, pypdf; print('document deps ok')"
+```
+
 ## 数据边界：PostgreSQL 是唯一主数据源
 
 Qdrant 只保存记录向量、`record_id` 和检索隔离所需的 `user_id`，不保存笔记
