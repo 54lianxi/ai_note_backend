@@ -1,4 +1,6 @@
 .env
-.env.example
+!.env.example
+.env.prod
 __pycache__/
 *.pyc
+/secrets/
