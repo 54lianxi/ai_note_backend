@@ -5,9 +5,13 @@
     uv run python scripts/compact_qdrant_payloads.py
 """
 import argparse
+import sys
+from pathlib import Path
 
-from app.config import settings
-from app.infrastructure.vector_db import get_vector_client, record_payload
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.config import settings  # noqa: E402
+from app.infrastructure.vector_db import get_vector_client, record_payload  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
