@@ -3,11 +3,6 @@
 import io
 from pathlib import Path
 
-from docx import Document
-from openpyxl import load_workbook
-from pptx import Presentation
-from pypdf import PdfReader
-
 from app.config import settings
 
 _TEXT_EXTENSIONS = {
@@ -51,11 +46,15 @@ def _decode_text(data: bytes) -> str:
 
 
 def _extract_pdf(data: bytes) -> str:
+    from pypdf import PdfReader
+
     reader = PdfReader(io.BytesIO(data))
     return "\n\n".join(page.extract_text() or "" for page in reader.pages)
 
 
 def _extract_docx(data: bytes) -> str:
+    from docx import Document
+
     document = Document(io.BytesIO(data))
     parts = [paragraph.text for paragraph in document.paragraphs]
     for table in document.tables:
@@ -68,6 +67,8 @@ def _extract_docx(data: bytes) -> str:
 
 
 def _extract_xlsx(data: bytes) -> str:
+    from openpyxl import load_workbook
+
     workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     parts: list[str] = []
     try:
@@ -83,6 +84,8 @@ def _extract_xlsx(data: bytes) -> str:
 
 
 def _extract_pptx(data: bytes) -> str:
+    from pptx import Presentation
+
     presentation = Presentation(io.BytesIO(data))
     parts: list[str] = []
     for index, slide in enumerate(presentation.slides, 1):
