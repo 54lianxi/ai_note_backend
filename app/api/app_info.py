@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.config import settings
@@ -30,6 +30,23 @@ _SUPPORTED_LANGUAGES = {
     "tr",
     "vi",
     "th",
+}
+_LANGUAGE_PACK_OVERRIDES = {
+    "zh": {"thinking": "正在思考..."},
+    "es": {"thinking": "Pensando..."},
+    "fr": {"thinking": "Réflexion..."},
+    "de": {"thinking": "Denkt nach..."},
+    "pt": {"thinking": "Pensando..."},
+    "it": {"thinking": "Sto pensando..."},
+    "ja": {"thinking": "考え中..."},
+    "ko": {"thinking": "생각 중..."},
+    "ru": {"thinking": "Думаю..."},
+    "ar": {"thinking": "جارٍ التفكير..."},
+    "hi": {"thinking": "सोच रहा है..."},
+    "id": {"thinking": "Sedang berpikir..."},
+    "tr": {"thinking": "Düşünüyor..."},
+    "vi": {"thinking": "Đang suy nghĩ..."},
+    "th": {"thinking": "กำลังคิด..."},
 }
 
 
@@ -62,9 +79,10 @@ async def get_language_pack(language: str):
 
     static_file = _LANGUAGE_PACK_DIR / f"{code}.json"
     if static_file.is_file():
-        return FileResponse(
-            static_file,
-            media_type="application/json",
+        pack = json.loads(static_file.read_text("utf-8"))
+        pack.update(_LANGUAGE_PACK_OVERRIDES.get(code, {}))
+        return JSONResponse(
+            pack,
             headers={"Cache-Control": "public, max-age=86400"},
         )
 
@@ -90,6 +108,7 @@ async def get_language_pack(language: str):
         await asyncio.to_thread(write_cache)
 
     pack = json.loads(cache_file.read_text("utf-8"))
+    pack.update(_LANGUAGE_PACK_OVERRIDES.get(code, {}))
     return JSONResponse(
         pack,
         headers={"Cache-Control": "public, max-age=86400"},

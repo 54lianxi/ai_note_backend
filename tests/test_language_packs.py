@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 
@@ -9,9 +8,10 @@ from app.api import app_info
 @pytest.mark.asyncio
 async def test_static_language_pack_is_complete():
     response = await app_info.get_language_pack("zh")
-    pack = json.loads(Path(response.path).read_text("utf-8"))
+    pack = json.loads(response.body)
 
     assert pack["homeTitle"]
+    assert pack["thinking"] == "正在思考..."
     assert len(pack) > 300
 
 
@@ -29,10 +29,10 @@ async def test_generated_language_pack_is_cached(monkeypatch, tmp_path):
         str(tmp_path),
     )
 
-    response = await app_info.get_language_pack("ja")
+    response = await app_info.get_language_pack("es")
 
-    assert json.loads(response.body)["navHome"] == "ホーム"
-    assert (tmp_path / "ja.json").is_file()
+    assert json.loads(response.body)["navHome"] == "Inicio"
+    assert (tmp_path / "es.json").is_file()
 
 
 class _FakeTranslationService:
@@ -40,9 +40,9 @@ class _FakeTranslationService:
         self.source = source
 
     async def translate_language_pack(self, source, language):
-        assert language == "ja"
+        assert language == "es"
         translated = {key: value for key, value in source.items()}
         translated.update(
-            {"navHome": "ホーム", "uploadImageTooLarge": "上限 {limit} MB"}
+            {"navHome": "Inicio", "uploadImageTooLarge": "Máximo {limit} MB"}
         )
         return translated
