@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -28,6 +28,9 @@ class Record(Base):
     # 语音保存后转写状态：pending 表示保存已完成、正在后台转写。
     transcription_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="done", server_default="done"
+    )
+    manual_transcription_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
     file_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # 通用附件地址
     file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -69,6 +69,10 @@ async def init_db():
             "transcription_status VARCHAR(20) NOT NULL DEFAULT 'done'"
         ))
         await conn.execute(text(
+            "ALTER TABLE records ADD COLUMN IF NOT EXISTS "
+            "manual_transcription_count INTEGER NOT NULL DEFAULT 0"
+        ))
+        await conn.execute(text(
             "ALTER TABLE records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP"
         ))
         await conn.execute(text(

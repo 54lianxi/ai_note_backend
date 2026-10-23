@@ -26,6 +26,8 @@ class RecordResponse(BaseModel):
     file_content_type: str | None = None
     file_size: int | None = None
     transcription_status: str = "done"
+    manual_transcription_count: int = 0
+    manual_transcription_limit: int = 3
     created_at: datetime
     updated_at: datetime | None = None
 

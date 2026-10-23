@@ -114,6 +114,8 @@ class Settings(BaseSettings):
     # 临时性 429/5xx/网络错误的重试次数与基础退避时间。
     ASR_MAX_RETRIES: int = Field(default=3, ge=0, le=5)
     ASR_RETRY_BASE_SECONDS: float = Field(default=2.0, ge=0, le=30)
+    # 每条语音记录允许用户主动重新转写的总次数。
+    MANUAL_TRANSCRIPTION_LIMIT: int = Field(default=3, ge=1, le=20)
 
     # 实时转写（录音过程中的字幕）。
     # provider=gemini 走 Live API 的 BidiGenerateContent；

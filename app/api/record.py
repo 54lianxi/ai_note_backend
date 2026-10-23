@@ -1,8 +1,10 @@
 """记录上传和记录管理接口"""
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
+from urllib.parse import urlparse
 
 from fastapi import (
     APIRouter,
@@ -17,11 +19,13 @@ from openai import AuthenticationError, OpenAIError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.media import resolve_object_name
 from app.config import settings
 from app.core.i18n import LanguageDep, t
 from app.core.security import CurrentUserId
 from app.core.timeutil import ensure_utc, parse_utc
 from app.infrastructure.database import get_db
+from app.infrastructure.minio_client import get_minio_client
 from app.infrastructure.vector_db import get_vector_client
 from app.models.record import Record
 from app.schemas.record import (
@@ -38,6 +42,7 @@ from app.services.subscription_service import (
     FREE_IMAGE_NOTE_LIMIT,
     FREE_VOICE_NOTE_LIMIT,
     get_state,
+    is_subscribed,
 )
 from app.workflows.record_workflow import (
     embed_text_chunks,
@@ -99,6 +104,8 @@ def _record_response(record: Record, message: str | None = None,
         file_content_type=record.file_content_type,
         file_size=record.file_size,
         transcription_status=record.transcription_status or "done",
+        manual_transcription_count=record.manual_transcription_count,
+        manual_transcription_limit=settings.MANUAL_TRANSCRIPTION_LIMIT,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -141,6 +148,8 @@ def _workflow_response(result, language: str | None = None) -> RecordResponse:
         file_content_type=result.content_type_header or None,
         file_size=len(result.file_data) if result.file_data else None,
         transcription_status=result.transcription_status or "done",
+        manual_transcription_count=0,
+        manual_transcription_limit=settings.MANUAL_TRANSCRIPTION_LIMIT,
         created_at=created_at,
         updated_at=parse_utc(result.updated_at) or created_at,
     )
@@ -436,6 +445,104 @@ async def update_record(
         logger.warning("编辑记录后刷新向量失败: %s", record.id, exc_info=True)
 
     await db.flush()
+    return _record_response(record, language=language)
+
+
+@router.post(
+    "/records/{record_id}/retry-transcription",
+    response_model=RecordResponse,
+)
+async def retry_transcription(
+    record_id: uuid.UUID,
+    db: DbSession,
+    user_id: CurrentUserId,
+    language: LanguageDep,
+    background_tasks: BackgroundTasks,
+):
+    """Pro 用户手动重新提交失败语音的后台转写。"""
+    if not await is_subscribed(db, user_id):
+        raise HTTPException(
+            status_code=402,
+            detail=t(language, "subscription_required"),
+        )
+
+    result = await db.execute(
+        select(Record).where(
+            Record.id == record_id,
+            Record.user_id == uuid.UUID(user_id),
+        ).with_for_update()
+    )
+    record = result.scalar_one_or_none()
+    if record is None or record.content_type != "voice":
+        raise HTTPException(
+            status_code=404,
+            detail=t(language, "record_not_found"),
+        )
+    if record.transcription_status == "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=t(language, "transcription_already_pending"),
+        )
+    if (
+        record.manual_transcription_count
+        >= settings.MANUAL_TRANSCRIPTION_LIMIT
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail=t(
+                language,
+                "manual_transcription_limit",
+                limit=settings.MANUAL_TRANSCRIPTION_LIMIT,
+            ),
+        )
+    if not record.file_url:
+        raise HTTPException(
+            status_code=404,
+            detail=t(language, "audio_not_found"),
+        )
+
+    path = urlparse(record.file_url).path.lstrip("/")
+    if path.startswith(f"{settings.API_PREFIX.lstrip('/')}/media/"):
+        path = path[len(settings.API_PREFIX.lstrip('/')) + len("/media/"):]
+    object_name = resolve_object_name(path)
+    if not object_name:
+        raise HTTPException(
+            status_code=404,
+            detail=t(language, "audio_not_found"),
+        )
+    minio = get_minio_client()
+
+    def read_audio() -> bytes:
+        response = None
+        try:
+            response = minio.client.get_object(minio.bucket, object_name)
+            return response.read()
+        finally:
+            if response is not None:
+                response.close()
+                response.release_conn()
+
+    try:
+        file_data = await asyncio.to_thread(read_audio)
+    except Exception as exc:
+        logger.warning("手动转写读取录音失败: %s", record_id, exc_info=True)
+        raise HTTPException(
+            status_code=404,
+            detail=t(language, "audio_not_found"),
+        ) from exc
+
+    record.transcription_status = "pending"
+    record.manual_transcription_count += 1
+    record.updated_at = datetime.now(UTC)
+    await db.commit()
+    background_tasks.add_task(
+        transcribe_voice_record,
+        record_id=str(record.id),
+        user_id=user_id,
+        file_data=file_data,
+        filename=record.file_name or "audio.wav",
+        language=language,
+    )
     return _record_response(record, language=language)
 
 
