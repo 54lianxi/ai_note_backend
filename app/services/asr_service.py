@@ -1,4 +1,5 @@
 """ASR 语音识别服务"""
+import asyncio
 import io
 import logging
 
@@ -27,6 +28,17 @@ _MIME_TYPES = {
 class ASRServiceError(RuntimeError):
     """语音识别上游调用失败。"""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
+
 
 class ASRService:
     """语音转文字服务。
@@ -53,9 +65,26 @@ class ASRService:
         :param filename: 文件名
         :return: 转写文本
         """
-        if self.provider == "gemini":
-            return await self._transcribe_gemini(audio_data, filename)
-        return await self._transcribe_openai(audio_data, filename)
+        attempts = settings.ASR_MAX_RETRIES + 1
+        for attempt in range(attempts):
+            try:
+                if self.provider == "gemini":
+                    return await self._transcribe_gemini(audio_data, filename)
+                return await self._transcribe_openai(audio_data, filename)
+            except ASRServiceError as error:
+                if not error.retryable or attempt + 1 >= attempts:
+                    raise
+                delay = settings.ASR_RETRY_BASE_SECONDS * (2**attempt)
+                logger.warning(
+                    "ASR 临时失败，%.1f 秒后重试 (%s/%s): %s",
+                    delay,
+                    attempt + 1,
+                    settings.ASR_MAX_RETRIES,
+                    error,
+                )
+                await asyncio.sleep(delay)
+
+        raise ASRServiceError("语音识别失败")
 
     async def _transcribe_openai(self, audio_data: bytes, filename: str) -> str:
         """调用 OpenAI 兼容的 /audio/transcriptions（Groq、OpenAI、硅基流动都适用）。"""
@@ -72,7 +101,18 @@ class ASRService:
                 **params,
             )
         except Exception as error:
-            raise ASRServiceError(f"语音识别请求失败: {error}") from error
+            status_code = getattr(error, "status_code", None)
+            retryable = (
+                status_code == 429
+                or (isinstance(status_code, int) and status_code >= 500)
+                or error.__class__.__name__
+                in {"APIConnectionError", "APITimeoutError"}
+            )
+            raise ASRServiceError(
+                f"语音识别请求失败: {error}",
+                status_code=status_code,
+                retryable=retryable,
+            ) from error
 
         return str(response).strip()
 
@@ -104,7 +144,9 @@ class ASRService:
                 upload_url = start.headers.get("x-goog-upload-url")
                 if not upload_url:
                     raise ASRServiceError(
-                        f"创建上传会话失败 {start.status_code}: {start.text[:200]}"
+                        f"创建上传会话失败 {start.status_code}: {start.text[:200]}",
+                        status_code=start.status_code,
+                        retryable=self._retryable_status(start.status_code),
                     )
 
                 uploaded = await client.post(
@@ -118,7 +160,9 @@ class ASRService:
                 )
                 if uploaded.status_code >= 400:
                     raise ASRServiceError(
-                        f"上传音频失败 {uploaded.status_code}: {uploaded.text[:200]}"
+                        f"上传音频失败 {uploaded.status_code}: {uploaded.text[:200]}",
+                        status_code=uploaded.status_code,
+                        retryable=self._retryable_status(uploaded.status_code),
                     )
                 file_info = (uploaded.json() or {}).get("file") or {}
                 file_uri = file_info.get("uri")
@@ -151,11 +195,16 @@ class ASRService:
                 )
                 if response.status_code >= 400:
                     raise ASRServiceError(
-                        f"语音识别接口返回 {response.status_code}: {response.text[:200]}"
+                        f"语音识别接口返回 {response.status_code}: {response.text[:200]}",
+                        status_code=response.status_code,
+                        retryable=self._retryable_status(response.status_code),
                     )
                 return self._extract_interaction_text(response.json())
         except httpx.HTTPError as error:
-            raise ASRServiceError(f"语音识别请求失败: {error}") from error
+            raise ASRServiceError(
+                f"语音识别请求失败: {error}",
+                retryable=True,
+            ) from error
         finally:
             if file_name:
                 await self._delete_file(file_name)
@@ -202,6 +251,10 @@ class ASRService:
             if lowered.endswith(suffix):
                 return mime
         return "audio/wav"
+
+    @staticmethod
+    def _retryable_status(status_code: int) -> bool:
+        return status_code == 429 or status_code >= 500
 
     async def transcribe_with_summary(
         self,

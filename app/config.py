@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     ASR_MODEL: str = Field(default="gemini-3.5-transcribe")
     # 转写语言提示。留空表示自动检测（Gemini 和 Whisper 都支持）。
     ASR_LANGUAGE: str = Field(default="")
+    # 临时性 429/5xx/网络错误的重试次数与基础退避时间。
+    ASR_MAX_RETRIES: int = Field(default=3, ge=0, le=5)
+    ASR_RETRY_BASE_SECONDS: float = Field(default=2.0, ge=0, le=30)
 
     # 实时转写（录音过程中的字幕）。
     # provider=gemini 走 Live API 的 BidiGenerateContent；
