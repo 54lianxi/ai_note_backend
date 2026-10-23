@@ -7,7 +7,9 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
-_ENV_FILE = os.getenv("ENV_FILE", ".env")
+_APP_ENV = os.getenv("APP_ENV", "")
+_ENV_FILENAME = os.getenv("ENV_FILE", ".env.prod" if _APP_ENV == "production" else ".env")
+_ENV_FILE = _ENV_FILENAME
 if not Path(_ENV_FILE).is_absolute():
     _ENV_FILE = str(_BACKEND_DIR / _ENV_FILE)
 
