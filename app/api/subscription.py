@@ -85,7 +85,7 @@ async def verify_subscription(
     """购买 / 续订后上报凭证，后端落库并返回最新订阅状态。"""
     if data.product_id not in {
         settings.SUBSCRIPTION_WEEKLY_PRODUCT_ID,
-        settings.SUBSCRIPTION_MONTHLY_PRODUCT_ID,
+        # settings.SUBSCRIPTION_MONTHLY_PRODUCT_ID,  # 暂时隐藏月度方案
     }:
         raise HTTPException(
             status_code=400, detail=t(language, "subscription_product_unknown")
