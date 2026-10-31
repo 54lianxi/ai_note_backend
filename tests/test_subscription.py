@@ -1,4 +1,5 @@
 """订阅额度与文案的单元测试。"""
+
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
@@ -14,9 +15,11 @@ from app.services.store_verification import (
     VerifiedSubscription,
 )
 from app.services.subscription_service import (
+    FREE_AUDIO_SECONDS_LIMIT,
     FREE_FILE_NOTE_LIMIT,
     FREE_IMAGE_NOTE_LIMIT,
     FREE_VOICE_NOTE_LIMIT,
+    PAID_AUDIO_SECONDS_LIMIT,
     SubscriptionState,
     _is_active,
     refresh_subscription_if_stale,
@@ -36,6 +39,8 @@ def _state(**overrides) -> SubscriptionState:
         "image_note_limit": FREE_IMAGE_NOTE_LIMIT,
         "file_note_count": 0,
         "file_note_limit": FREE_FILE_NOTE_LIMIT,
+        "audio_seconds_used": 0,
+        "audio_seconds_limit": FREE_AUDIO_SECONDS_LIMIT,
     }
     base.update(overrides)
     return SubscriptionState(**base)
@@ -45,6 +50,32 @@ def test_free_limit_matches_config():
     assert FREE_VOICE_NOTE_LIMIT == settings.SUBSCRIPTION_FREE_VOICE_LIMIT == 3
     assert FREE_IMAGE_NOTE_LIMIT == settings.SUBSCRIPTION_FREE_IMAGE_LIMIT == 3
     assert FREE_FILE_NOTE_LIMIT == settings.SUBSCRIPTION_FREE_FILE_LIMIT == 1
+    assert FREE_AUDIO_SECONDS_LIMIT == settings.SUBSCRIPTION_FREE_AUDIO_MINUTES * 60
+
+
+def test_paid_audio_quota_is_two_hours():
+    assert PAID_AUDIO_SECONDS_LIMIT == 2 * 60 * 60
+    assert PAID_AUDIO_SECONDS_LIMIT == settings.SUBSCRIPTION_PAID_AUDIO_MINUTES * 60
+
+
+def test_audio_quota_blocks_recording_when_used_up():
+    remaining = _state(audio_seconds_used=FREE_AUDIO_SECONDS_LIMIT - 30)
+    assert remaining.audio_seconds_remaining == 30
+    assert remaining.can_record_audio
+
+    exhausted = _state(audio_seconds_used=FREE_AUDIO_SECONDS_LIMIT)
+    assert exhausted.audio_seconds_remaining == 0
+    assert not exhausted.can_record_audio
+
+
+def test_subscribed_user_still_has_audio_quota():
+    state = _state(
+        is_subscribed=True,
+        voice_note_limit=None,
+        audio_seconds_limit=PAID_AUDIO_SECONDS_LIMIT,
+        audio_seconds_used=PAID_AUDIO_SECONDS_LIMIT,
+    )
+    assert not state.can_record_audio
 
 
 def test_free_user_can_create_until_reaching_limit():
@@ -89,6 +120,12 @@ def test_limit_message_includes_number():
     )
 
 
+def test_audio_quota_message_includes_usage():
+    for language in ("zh", "en"):
+        message = t(language, "subscription_audio_quota", used=7, limit=10)
+        assert "7" in message and "10" in message
+
+
 def test_subscription_messages_exist_in_both_languages():
     for language in ("zh", "en"):
         assert t(language, "subscription_required")
@@ -131,9 +168,7 @@ def test_verified_subscription_is_active(monkeypatch):
 
 def test_verified_but_expired_subscription_is_not_active(monkeypatch):
     monkeypatch.setattr(settings, "SUBSCRIPTION_VERIFY_WITH_STORE", True)
-    subscription = _subscription(
-        expires_at=datetime.now(UTC) - timedelta(seconds=1)
-    )
+    subscription = _subscription(expires_at=datetime.now(UTC) - timedelta(seconds=1))
 
     assert not _is_active(subscription, datetime.now(UTC))
 
@@ -165,9 +200,7 @@ async def test_refresh_revalidates_old_unverified_row(monkeypatch):
             store_state="SUBSCRIPTION_STATE_ACTIVE",
         )
 
-    monkeypatch.setattr(
-        subscription_service, "verify_store_subscription", fake_verify
-    )
+    monkeypatch.setattr(subscription_service, "verify_store_subscription", fake_verify)
     await refresh_subscription_if_stale(_FakeDb(subscription), subscription.user_id)
 
     assert subscription.last_verified_at is not None
@@ -183,9 +216,7 @@ async def test_refresh_expires_invalid_old_row(monkeypatch):
     async def fake_verify(**_kwargs):
         raise StoreVerificationError("invalid_receipt", detail="not found")
 
-    monkeypatch.setattr(
-        subscription_service, "verify_store_subscription", fake_verify
-    )
+    monkeypatch.setattr(subscription_service, "verify_store_subscription", fake_verify)
     await refresh_subscription_if_stale(_FakeDb(subscription), subscription.user_id)
 
     assert subscription.status == "expired"
@@ -201,9 +232,7 @@ async def test_refresh_keeps_unverified_row_locked_when_store_is_down(monkeypatc
     async def fake_verify(**_kwargs):
         raise StoreVerificationError("store_unavailable", http_status=503)
 
-    monkeypatch.setattr(
-        subscription_service, "verify_store_subscription", fake_verify
-    )
+    monkeypatch.setattr(subscription_service, "verify_store_subscription", fake_verify)
     await refresh_subscription_if_stale(_FakeDb(subscription), subscription.user_id)
 
     assert subscription.last_verified_at is None
@@ -223,9 +252,7 @@ async def test_refresh_keeps_previously_verified_row_when_store_is_down(
     async def fake_verify(**_kwargs):
         raise StoreVerificationError("store_unavailable", http_status=503)
 
-    monkeypatch.setattr(
-        subscription_service, "verify_store_subscription", fake_verify
-    )
+    monkeypatch.setattr(subscription_service, "verify_store_subscription", fake_verify)
     await refresh_subscription_if_stale(_FakeDb(subscription), subscription.user_id)
 
     assert _is_active(subscription, datetime.now(UTC))

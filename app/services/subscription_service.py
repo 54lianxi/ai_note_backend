@@ -3,9 +3,12 @@
 免费用户：
 - 不能使用语音笔记的实时转写、AI 对话的语音输入（由客户端与实时转写接口拦截）；
 - 最多保存 3 段录音/上传音频、3 张图片、1 篇文档；
+- 每月录音时长额度 10 分钟；
 - 会看到广告（客户端展示）。
-订阅用户：以上全部解锁。
+订阅用户：以上全部解锁，录音时长额度为每月 2 小时。
+时长额度按自然月（UTC）统计，每月 1 日重置。
 """
+
 import logging
 import uuid
 from dataclasses import dataclass
@@ -30,6 +33,16 @@ FREE_VOICE_NOTE_LIMIT = settings.SUBSCRIPTION_FREE_VOICE_LIMIT
 FREE_IMAGE_NOTE_LIMIT = settings.SUBSCRIPTION_FREE_IMAGE_LIMIT
 FREE_FILE_NOTE_LIMIT = settings.SUBSCRIPTION_FREE_FILE_LIMIT
 
+# 每月录音时长额度（秒）。
+FREE_AUDIO_SECONDS_LIMIT = settings.SUBSCRIPTION_FREE_AUDIO_MINUTES * 60
+PAID_AUDIO_SECONDS_LIMIT = settings.SUBSCRIPTION_PAID_AUDIO_MINUTES * 60
+
+
+def current_period_start(now: datetime | None = None) -> datetime:
+    """当前额度周期的起点：自然月（UTC）1 日 00:00。"""
+    now = now or datetime.now(UTC)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
 
 @dataclass(frozen=True)
 class SubscriptionState:
@@ -46,6 +59,12 @@ class SubscriptionState:
     image_note_limit: int | None
     file_note_count: int
     file_note_limit: int | None
+    audio_seconds_used: int
+    audio_seconds_limit: int
+
+    @property
+    def audio_seconds_remaining(self) -> int:
+        return max(0, self.audio_seconds_limit - self.audio_seconds_used)
 
     @property
     def can_create_voice_note(self) -> bool:
@@ -58,6 +77,11 @@ class SubscriptionState:
     @property
     def can_create_file_note(self) -> bool:
         return self.is_subscribed or self.file_note_count < FREE_FILE_NOTE_LIMIT
+
+    @property
+    def can_record_audio(self) -> bool:
+        """能否再保存一段音频：条数额度和本月时长额度都要有剩余。"""
+        return self.audio_seconds_remaining > 0 and self.can_create_voice_note
 
 
 class SubscriptionTokenInUse(Exception):
@@ -97,9 +121,7 @@ async def get_subscription(
 ) -> Subscription | None:
     """取当前用户的订阅记录（没有则返回 None）。"""
     uid = user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(user_id)
-    result = await db.execute(
-        select(Subscription).where(Subscription.user_id == uid)
-    )
+    result = await db.execute(select(Subscription).where(Subscription.user_id == uid))
     return result.scalar_one_or_none()
 
 
@@ -122,6 +144,25 @@ async def count_notes_by_type(
     ).scalar_one()
 
 
+async def sum_audio_seconds(
+    db: AsyncSession,
+    user_id: str | uuid.UUID,
+    since: datetime,
+) -> int:
+    """某时间点之后保存的音频总时长（秒），用于本月录音额度。"""
+    uid = user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(user_id)
+    total = (
+        await db.execute(
+            select(func.coalesce(func.sum(Record.audio_duration_seconds), 0)).where(
+                Record.user_id == uid,
+                Record.content_type == "voice",
+                Record.created_at >= since,
+            )
+        )
+    ).scalar_one()
+    return int(total or 0)
+
+
 async def get_state(db: AsyncSession, user_id: str | uuid.UUID) -> SubscriptionState:
     """汇总订阅状态 + 免费额度用量，供接口和限额判断共用。"""
     subscription = await get_subscription(db, user_id)
@@ -129,6 +170,7 @@ async def get_state(db: AsyncSession, user_id: str | uuid.UUID) -> SubscriptionS
     voice_count = await count_notes_by_type(db, user_id, "voice")
     image_count = await count_notes_by_type(db, user_id, "image")
     file_count = await count_notes_by_type(db, user_id, "file")
+    audio_used = await sum_audio_seconds(db, user_id, current_period_start())
     return SubscriptionState(
         is_subscribed=active,
         # 未验证 / 已失效的记录只用于内部排查，不把过期信息当成有效权益返回。
@@ -142,6 +184,10 @@ async def get_state(db: AsyncSession, user_id: str | uuid.UUID) -> SubscriptionS
         image_note_limit=None if active else FREE_IMAGE_NOTE_LIMIT,
         file_note_count=file_count,
         file_note_limit=None if active else FREE_FILE_NOTE_LIMIT,
+        audio_seconds_used=audio_used,
+        audio_seconds_limit=(
+            PAID_AUDIO_SECONDS_LIMIT if active else FREE_AUDIO_SECONDS_LIMIT
+        ),
     )
 
 
@@ -154,9 +200,7 @@ async def is_subscribed(db: AsyncSession, user_id: str | uuid.UUID) -> bool:
     return _is_active(subscription, datetime.now(UTC))
 
 
-def _apply_verified(
-    subscription: Subscription, verified: VerifiedSubscription
-) -> None:
+def _apply_verified(subscription: Subscription, verified: VerifiedSubscription) -> None:
     now = datetime.now(UTC)
     subscription.platform = verified.platform
     subscription.product_id = verified.product_id
@@ -223,10 +267,7 @@ async def refresh_subscription_if_stale(
     now = datetime.now(UTC)
     last_verified = _as_utc(subscription.last_verified_at)
     ttl = max(60, settings.SUBSCRIPTION_CACHE_TTL_SECONDS)
-    if (
-        last_verified is not None
-        and (now - last_verified).total_seconds() < ttl
-    ):
+    if last_verified is not None and (now - last_verified).total_seconds() < ttl:
         return
 
     try:

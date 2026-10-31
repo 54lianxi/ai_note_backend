@@ -3,6 +3,7 @@
 客户端在商店完成购买后，把凭证上报到这里；后端必须向 Google Play
 校验通过才落库。之后各接口（语音笔记限额、实时转写）只读本地缓存。
 """
+
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
@@ -61,6 +62,10 @@ def _status_response(state) -> SubscriptionStatusResponse:
         file_note_count=state.file_note_count,
         file_note_limit=state.file_note_limit,
         can_create_file_note=state.can_create_file_note,
+        audio_seconds_used=state.audio_seconds_used,
+        audio_seconds_limit=state.audio_seconds_limit,
+        audio_seconds_remaining=state.audio_seconds_remaining,
+        can_record_audio=state.can_record_audio,
     )
 
 
@@ -148,8 +153,7 @@ async def verify_subscription(
             product_id=data.product_id,
             purchase_token=data.purchase_token or data.transaction_id or "",
             transaction_id=data.transaction_id,
-            expires_at=now
-            + timedelta(days=settings.SUBSCRIPTION_FALLBACK_DAYS),
+            expires_at=now + timedelta(days=settings.SUBSCRIPTION_FALLBACK_DAYS),
             auto_renewing=True,
             store_state="DEV_UNVERIFIED",
         )

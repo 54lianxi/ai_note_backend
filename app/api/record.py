@@ -1,4 +1,5 @@
 """记录上传和记录管理接口"""
+
 import asyncio
 import logging
 import os
@@ -138,8 +139,9 @@ def _model_service_error(error: Exception, language: str | None) -> HTTPExceptio
     )
 
 
-def _record_response(record: Record, message: str | None = None,
-                     language: str | None = None) -> RecordResponse:
+def _record_response(
+    record: Record, message: str | None = None, language: str | None = None
+) -> RecordResponse:
     message = message or t(language, "record_saved")
     return RecordResponse(
         record_id=record.id,
@@ -242,6 +244,7 @@ async def create_voice_record(
     language: LanguageDep,
     background_tasks: BackgroundTasks,
     conversation_id: Annotated[str | None, Form()] = None,
+    duration_seconds: Annotated[int, Form(ge=0)] = 0,
 ):
     """上传语音记录。
 
@@ -249,7 +252,8 @@ async def create_voice_record(
     这样实时转写断开或长录音识别不完整时，最终笔记内容仍然完整。
     保存接口不再把 ASR 耗时算进「保存笔记」。
 
-    免费用户最多保存 3 段音频笔记，超出时返回 402，客户端据此引导订阅。
+    免费用户最多保存 3 段音频笔记；所有用户还受每月录音时长额度限制
+    （免费 10 分钟、订阅 2 小时），超出时返回 402，客户端据此引导订阅。
     """
     if not file.content_type or not file.content_type.startswith("audio"):
         raise HTTPException(status_code=400, detail=t(language, "audio_required"))
@@ -259,6 +263,22 @@ async def create_voice_record(
         raise HTTPException(
             status_code=402,
             detail=t(language, "subscription_rate_limit", limit=FREE_VOICE_NOTE_LIMIT),
+        )
+    # 客户端上报时长，只用于额度统计；上限按单次录音上限截断，避免异常值。
+    duration_seconds = min(duration_seconds, settings.MAX_VOICE_DURATION_SECONDS)
+    remaining_seconds = state.audio_seconds_remaining
+    if remaining_seconds <= 0 or duration_seconds > remaining_seconds:
+        # 订阅到期后已用可能超过免费上限，提示里封顶，避免出现「已用 120/10 分钟」。
+        used_minutes = min((state.audio_seconds_used + 59) // 60,
+                           (state.audio_seconds_limit + 59) // 60)
+        raise HTTPException(
+            status_code=402,
+            detail=t(
+                language,
+                "subscription_audio_quota",
+                used=used_minutes,
+                limit=(state.audio_seconds_limit + 59) // 60,
+            ),
         )
 
     file_path, file_size = await _spool_voice_upload(
@@ -275,6 +295,7 @@ async def create_voice_record(
             content="",
             file_path=file_path,
             file_size=file_size,
+            audio_duration_seconds=duration_seconds,
             filename=file.filename or "audio.wav",
             content_type_header=file.content_type,
             language=language,
@@ -374,9 +395,7 @@ async def create_file_record(
     try:
         file_data = await _read_upload(file, settings.MAX_FILE_UPLOAD_MB, language)
         if not file_data:
-            raise HTTPException(
-                status_code=400, detail=t(language, "file_required")
-            )
+            raise HTTPException(status_code=400, detail=t(language, "file_required"))
 
         result = await execute_record_workflow(
             user_id=user_id,
@@ -442,9 +461,7 @@ async def get_record(
     )
     record = result.scalar_one_or_none()
     if record is None:
-        raise HTTPException(
-            status_code=404, detail=t(language, "record_not_found")
-        )
+        raise HTTPException(status_code=404, detail=t(language, "record_not_found"))
     _fail_stale_transcriptions([record])
     return _record_response(record)
 
@@ -466,9 +483,7 @@ async def update_record(
     )
     record = result.scalar_one_or_none()
     if record is None:
-        raise HTTPException(
-            status_code=404, detail=t(language, "record_not_found")
-        )
+        raise HTTPException(status_code=404, detail=t(language, "record_not_found"))
 
     record.content = data.content.strip()
     if data.summary is not None and data.summary.strip():
@@ -482,9 +497,7 @@ async def update_record(
         except Exception:
             logger.warning("编辑语音后重新生成摘要失败: %s", record.id, exc_info=True)
             record.summary = (
-                record.content[:100] + "..."
-                if len(record.content) > 100
-                else None
+                record.content[:100] + "..." if len(record.content) > 100 else None
             )
     else:
         record.summary = record.content[:100] + (
@@ -528,10 +541,12 @@ async def retry_transcription(
         )
 
     result = await db.execute(
-        select(Record).where(
+        select(Record)
+        .where(
             Record.id == record_id,
             Record.user_id == uuid.UUID(user_id),
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     record = result.scalar_one_or_none()
     if record is None or record.content_type != "voice":
@@ -544,10 +559,7 @@ async def retry_transcription(
             status_code=409,
             detail=t(language, "transcription_already_pending"),
         )
-    if (
-        record.manual_transcription_count
-        >= settings.MANUAL_TRANSCRIPTION_LIMIT
-    ):
+    if record.manual_transcription_count >= settings.MANUAL_TRANSCRIPTION_LIMIT:
         raise HTTPException(
             status_code=429,
             detail=t(
@@ -564,7 +576,7 @@ async def retry_transcription(
 
     path = urlparse(record.file_url).path.lstrip("/")
     if path.startswith(f"{settings.API_PREFIX.lstrip('/')}/media/"):
-        path = path[len(settings.API_PREFIX.lstrip('/')) + len("/media/"):]
+        path = path[len(settings.API_PREFIX.lstrip("/")) + len("/media/") :]
     object_name = resolve_object_name(path)
     if not object_name:
         raise HTTPException(
@@ -639,9 +651,7 @@ async def delete_record(
     )
     record = result.scalar_one_or_none()
     if record is None:
-        raise HTTPException(
-            status_code=404, detail=t(language, "record_not_found")
-        )
+        raise HTTPException(status_code=404, detail=t(language, "record_not_found"))
 
     if record.vector_id:
         try:

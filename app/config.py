@@ -8,10 +8,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _APP_ENV = os.getenv("APP_ENV", "")
-_ENV_FILENAME = os.getenv("ENV_FILE", ".env.prod" if _APP_ENV == "production" else ".env")
+_ENV_FILENAME = os.getenv(
+    "ENV_FILE", ".env.prod" if _APP_ENV == "production" else ".env"
+)
 _ENV_FILE = _ENV_FILENAME
 if not Path(_ENV_FILE).is_absolute():
     _ENV_FILE = str(_BACKEND_DIR / _ENV_FILE)
+
+_PLACEHOLDER_SECRET_KEYS = frozenset(
+    {
+        "",
+        "your-secret-key-change-in-production",
+        "replace-with-a-long-random-secret",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -22,7 +32,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-    
+
     # 应用基础配置
     APP_NAME: str = "AI-Record"
     APP_VERSION: str = "0.1.0"
@@ -46,22 +56,24 @@ class Settings(BaseSettings):
     MAX_IMAGE_UPLOAD_MB: int = Field(default=8, gt=0)
     MAX_AUDIO_UPLOAD_MB: int = Field(default=600, gt=0)
     MAX_FILE_UPLOAD_MB: int = Field(default=45, gt=0)
+    # 单次录音时长上限，和客户端 AppConfig.maxVoiceDuration 保持一致。
+    MAX_VOICE_DURATION_SECONDS: int = Field(default=4 * 60 * 60, gt=0)
     # 单份文档最多抽取/索引的字符数，避免超大文件产生过多向量。
     MAX_DOCUMENT_TEXT_CHARS: int = Field(default=300_000, gt=0)
-    
+
     # 数据库配置
     DATABASE_URL: str = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost:5432/ai_record",
-        description="PostgreSQL 异步连接字符串"
+        description="PostgreSQL 异步连接字符串",
     )
-    
+
     # MinIO 配置
     MINIO_ENDPOINT: str = Field(default="localhost:9000")
     MINIO_ACCESS_KEY: str = Field(default="minioadmin")
     MINIO_SECRET_KEY: str = Field(default="minioadmin")
     MINIO_BUCKET: str = Field(default="records")
     MINIO_SECURE: bool = False
-    
+
     # Qdrant 向量数据库配置
     # 填了 QDRANT_URL 就用远程（Qdrant Cloud），否则用下面的 host/port 连本地。
     QDRANT_URL: str = Field(default="")
@@ -69,7 +81,7 @@ class Settings(BaseSettings):
     QDRANT_HOST: str = Field(default="localhost")
     QDRANT_PORT: int = Field(default=6333)
     QDRANT_COLLECTION: str = Field(default="records")
-    
+
     # 大模型配置（对话、意图识别、图片理解）。
     # 默认走 Google Gemini 的 OpenAI 兼容层，换成别的厂商只改这三项。
     LLM_API_KEY: str = Field(default="")
@@ -147,7 +159,7 @@ class Settings(BaseSettings):
     GOOGLE_TOKEN_INFO_URL: str = Field(
         default="https://oauth2.googleapis.com/tokeninfo"
     )
-    
+
     # JWT 认证配置
     SECRET_KEY: str = Field(default="your-secret-key-change-in-production")
     ALGORITHM: str = Field(default="HS256")
@@ -167,6 +179,10 @@ class Settings(BaseSettings):
     SUBSCRIPTION_FREE_VOICE_LIMIT: int = Field(default=3, gt=0)
     SUBSCRIPTION_FREE_IMAGE_LIMIT: int = Field(default=3, gt=0)
     SUBSCRIPTION_FREE_FILE_LIMIT: int = Field(default=1, gt=0)
+    # 每月录音时长额度（分钟），自然月（UTC）1 日重置。
+    # 免费用户的条数限制仍然生效；订阅用户条数不限，但受时长额度约束。
+    SUBSCRIPTION_FREE_AUDIO_MINUTES: int = Field(default=10, gt=0)
+    SUBSCRIPTION_PAID_AUDIO_MINUTES: int = Field(default=120, gt=0)
     # 仅本地开发免校验时使用，按多少天授予订阅。
     SUBSCRIPTION_FALLBACK_DAYS: int = Field(default=31)
     # 是否启用商店服务端校验。生产环境必须保持 true；关闭后接口会拒绝
@@ -189,9 +205,7 @@ class Settings(BaseSettings):
     GOOGLE_PLAY_API_BASE: str = Field(
         default="https://androidpublisher.googleapis.com/androidpublisher/v3"
     )
-    GOOGLE_OAUTH_TOKEN_URL: str = Field(
-        default="https://oauth2.googleapis.com/token"
-    )
+    GOOGLE_OAUTH_TOKEN_URL: str = Field(default="https://oauth2.googleapis.com/token")
 
     @model_validator(mode="after")
     def _reuse_llm_key(self) -> "Settings":
@@ -204,6 +218,14 @@ class Settings(BaseSettings):
         if not self.ASR_API_KEY:
             self.ASR_API_KEY = self.LLM_API_KEY
         return self
+
+    @model_validator(mode="after")
+    def _reject_placeholder_secret_key(self) -> "Settings":
+        """生产环境拒绝占位 SECRET_KEY，否则任何人都能伪造登录令牌。"""
+        if not self.DEBUG and self.SECRET_KEY in _PLACEHOLDER_SECRET_KEYS:
+            raise ValueError("SECRET_KEY 仍是占位值，生产环境必须配置真实随机密钥")
+        return self
+
 
 # 全局配置实例
 settings = Settings()

@@ -2,6 +2,7 @@
 
 语言来自请求的 Accept-Language，认不出来的语言一律回落到默认语言。
 """
+
 from typing import Annotated
 
 from fastapi import Depends, Header
@@ -108,6 +109,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "image_description": "图片描述：\n{text}",
         "subscription_required": "该功能需要订阅后使用",
         "subscription_rate_limit": "该类笔记已达免费上限（{limit} 项），订阅后不限量",
+        "subscription_audio_quota": "本月录音额度不足（已用 {used}/{limit} 分钟，每月 1 日重置）",
         "subscription_product_unknown": "订阅商品不匹配",
         "subscription_receipt_required": "缺少订阅凭证",
         "subscription_receipt_invalid": "订阅凭证无效或已过期",
@@ -148,6 +150,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "image_description": "Image description:\n{text}",
         "subscription_required": "This feature requires a subscription",
         "subscription_rate_limit": "You have reached the free limit of {limit} items in this category. Subscribe for unlimited notes",
+        "subscription_audio_quota": "Not enough audio time left this month ({used}/{limit} minutes used; resets on the 1st)",
         "subscription_product_unknown": "Subscription product mismatch",
         "subscription_receipt_required": "Missing subscription receipt",
         "subscription_receipt_invalid": "The subscription receipt is invalid or expired",
@@ -249,11 +252,9 @@ def search_answer_prompts(
     system_prompt = _SEARCH_ANSWER_SYSTEM.get(lang)
     if system_prompt is None:
         language_name = _LANGUAGE_NAMES.get(lang, lang)
-        system_prompt = (
-            _SEARCH_ANSWER_SYSTEM["en"].replace(
-                "Answer in English.",
-                f"Answer in {language_name} ({lang}).",
-            )
+        system_prompt = _SEARCH_ANSWER_SYSTEM["en"].replace(
+            "Answer in English.",
+            f"Answer in {language_name} ({lang}).",
         )
     return system_prompt, prompt
 

@@ -1,4 +1,5 @@
 """LangGraph 记录工作流 - 处理多模态输入并存储"""
+
 import asyncio
 import logging
 import uuid
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RecordState:
     """记录工作流状态"""
+
     # 输入
     user_id: str
     content_type: Literal["text", "voice", "image", "file"]
@@ -34,9 +36,10 @@ class RecordState:
     file_data: bytes | None = None  # 原始文件数据（图片、文档）
     file_path: str = ""  # 语音的临时文件，流式上传，避免整段进内存
     file_size: int = 0  # 语音文件字节数
+    audio_duration_seconds: int = 0  # 语音时长，用于每月录音额度
     filename: str = ""
     content_type_header: str = ""  # HTTP Content-Type
-    
+
     # 中间状态
     image_key_info: dict = field(default_factory=dict)  # 视觉模型提取的信息
     image_url: str = ""  # MinIO 图片 URL
@@ -46,7 +49,7 @@ class RecordState:
     summary: str = ""
     # 语音转写状态：done 已完成（或不需要转写）、pending 保存后由后台任务转写。
     transcription_status: str = "done"
-    
+
     # 输出
     record_id: str = ""
     created_at: str = ""  # 记录入库时间（UTC，ISO 字符串）
@@ -56,10 +59,13 @@ class RecordState:
 
 # ========== 节点函数 ==========
 
+
 async def process_text_node(state: RecordState) -> dict:
     """处理文本输入：直接使用文本"""
     state.content = state.content.strip()
-    state.summary = state.content[:100] + "..." if len(state.content) > 100 else state.content
+    state.summary = (
+        state.content[:100] + "..." if len(state.content) > 100 else state.content
+    )
     return {"content": state.content, "summary": state.summary}
 
 
@@ -107,7 +113,7 @@ async def process_image_node(state: RecordState) -> dict:
         state.file_url = state.image_url
     except Exception:
         logger.exception("图片上传对象存储失败，继续保存图片记录元数据")
-    
+
     # 2. 视觉模型提取关键信息
     try:
         vision = VisionService()
@@ -120,7 +126,7 @@ async def process_image_node(state: RecordState) -> dict:
         logger.exception("图片视觉识别失败，使用图片文件名作为记录内容")
         key_info = {}
     state.image_key_info = key_info
-    
+
     # 3. 将提取的信息作为文本内容
     parts = []
     if key_info.get("extracted_text"):
@@ -133,7 +139,7 @@ async def process_image_node(state: RecordState) -> dict:
     # 文字和描述各成一段，中间空一行，详情页和检索都更好读。
     state.content = "\n\n".join(parts) if parts else fallback
     state.summary = key_info.get("summary") or fallback
-    
+
     return {
         "image_url": state.image_url,
         "file_url": state.file_url,
@@ -169,9 +175,7 @@ async def process_file_node(state: RecordState) -> dict:
 
     if extracted:
         state.content = f"文件名：{filename}\n\n{extracted}"
-        state.summary = (
-            extracted[:100] + "..." if len(extracted) > 100 else extracted
-        )
+        state.summary = extracted[:100] + "..." if len(extracted) > 100 else extracted
     else:
         state.content = f"附件：{filename}"
         state.summary = filename
@@ -232,7 +236,7 @@ async def embed_node(state: RecordState) -> dict:
 async def store_node(state: RecordState) -> dict:
     """存储到向量数据库和 PostgreSQL"""
     record_id = str(uuid.uuid4())
-    
+
     # 1. 写入向量数据库
     vector_id = None
     if state.embedding_chunks:
@@ -246,9 +250,10 @@ async def store_node(state: RecordState) -> dict:
         except Exception as e:
             state.error = f"向量数据库写入失败: {e!s}"
             logger.exception("写入向量数据库失败，继续保存记录")
-    
+
     # 2. 写入 PostgreSQL
     import json
+
     async with async_session_factory() as session:
         record = Record(
             id=uuid.UUID(record_id),
@@ -257,18 +262,20 @@ async def store_node(state: RecordState) -> dict:
             summary=state.summary,
             content_type=state.content_type,
             image_url=state.image_url or None,
-            image_key_info=json.dumps(state.image_key_info, ensure_ascii=False) if state.image_key_info else None,
+            image_key_info=json.dumps(state.image_key_info, ensure_ascii=False)
+            if state.image_key_info
+            else None,
             vector_id=vector_id,
             transcription_status=state.transcription_status,
             file_url=state.file_url or None,
             file_name=state.filename or None,
             file_content_type=state.content_type_header or None,
-            file_size=state.file_size or (
-                len(state.file_data) if state.file_data else None
-            ),
+            file_size=state.file_size
+            or (len(state.file_data) if state.file_data else None),
+            audio_duration_seconds=state.audio_duration_seconds,
         )
         session.add(record)
-        
+
         # 笔记只写 records 表，不再往 conversations/messages 里插消息，
         # 否则笔记内容会出现在 AI 聊天的对话记录里。
         # 取数据库生成的时间（UTC），避免响应里用服务器本地时间伪造。
@@ -277,7 +284,7 @@ async def store_node(state: RecordState) -> dict:
         created_at = record.created_at
         updated_at = record.updated_at
         await session.commit()
-    
+
     state.record_id = record_id
     state.created_at = created_at.isoformat() if created_at else ""
     state.updated_at = updated_at.isoformat() if updated_at else ""
@@ -290,6 +297,7 @@ async def store_node(state: RecordState) -> dict:
 
 # ========== 路由函数 ==========
 
+
 def route_by_content_type(state: RecordState) -> str:
     """根据输入类型路由到不同处理节点"""
     return state.content_type
@@ -297,10 +305,11 @@ def route_by_content_type(state: RecordState) -> str:
 
 # ========== 构建工作流 ==========
 
+
 def build_record_workflow() -> StateGraph:
     """构建记录工作流图"""
     workflow = StateGraph(RecordState)
-    
+
     # 添加处理节点
     workflow.add_node("process_text", process_text_node)
     workflow.add_node("process_voice", process_voice_node)
@@ -308,7 +317,7 @@ def build_record_workflow() -> StateGraph:
     workflow.add_node("process_file", process_file_node)
     workflow.add_node("embed", embed_node)
     workflow.add_node("store", store_node)
-    
+
     # 条件路由：根据输入类型分发
     workflow.add_conditional_edges(
         START,
@@ -320,7 +329,7 @@ def build_record_workflow() -> StateGraph:
             "file": "process_file",
         },
     )
-    
+
     # 所有处理完成后 → 向量化 → 存储
     workflow.add_edge("process_text", "embed")
     workflow.add_edge("process_voice", "embed")
@@ -328,7 +337,7 @@ def build_record_workflow() -> StateGraph:
     workflow.add_edge("process_file", "embed")
     workflow.add_edge("embed", "store")
     workflow.add_edge("store", END)
-    
+
     return workflow.compile()
 
 
@@ -344,6 +353,7 @@ async def execute_record_workflow(
     file_data: bytes | None = None,
     file_path: str = "",
     file_size: int = 0,
+    audio_duration_seconds: int = 0,
     filename: str = "",
     content_type_header: str = "",
     language: str | None = None,
@@ -356,11 +366,12 @@ async def execute_record_workflow(
         file_data=file_data,
         file_path=file_path,
         file_size=file_size,
+        audio_duration_seconds=audio_duration_seconds,
         filename=filename,
         content_type_header=content_type_header,
         language=language,
     )
-    
+
     result = await record_workflow.ainvoke(initial_state)
     if isinstance(result, RecordState):
         return result
@@ -409,7 +420,9 @@ async def transcribe_voice_record(
                 user_id=user_id,
             )
         except Exception:
-            logger.warning("语音记录后台向量化失败，record_id=%s", record_id, exc_info=True)
+            logger.warning(
+                "语音记录后台向量化失败，record_id=%s", record_id, exc_info=True
+            )
 
     async with async_session_factory() as session:
         record = await session.get(Record, uuid.UUID(record_id))

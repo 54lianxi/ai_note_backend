@@ -87,6 +87,17 @@ ASR_REALTIME_PROXY=
 ## 免费额度与订阅
 
 未订阅用户按类型单独计数：音频/录音合计 3 段、图片 3 张、文档 1 篇。
+除条数外，录音还有一条**自然月时长额度**（UTC 每月 1 日 0 点重置）：
+免费版每月 10 分钟，订阅后每月 120 分钟。时长以保存录音时客户端上报
+`duration_seconds` 为准，后端按 `records.audio_duration_seconds` 当月求和，
+额度不足时直接返回 402；单次录音另有 4 小时上限。额度可在环境文件里调整：
+
+```dotenv
+SUBSCRIPTION_FREE_AUDIO_MINUTES=10
+SUBSCRIPTION_PAID_AUDIO_MINUTES=120
+MAX_VOICE_DURATION_SECONDS=14400
+```
+
 周订阅和月订阅的权益一致，商品 ID 分别为：
 
 ```dotenv
