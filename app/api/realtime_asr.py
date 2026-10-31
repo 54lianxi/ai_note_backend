@@ -42,18 +42,23 @@ async def realtime_transcription(websocket: WebSocket):
             yield frame
 
     async def receive_audio():
-        while True:
-            message = await websocket.receive()
-            if message.get("type") == "websocket.disconnect":
-                raise WebSocketDisconnect
-            if message.get("bytes") is not None:
-                await audio_queue.put(message["bytes"])
-            elif message.get("text") == "stop":
-                await audio_queue.put(None)
-                return
-            elif message.get("text") == "cancel":
-                await audio_queue.put(None)
-                return
+        try:
+            while True:
+                message = await websocket.receive()
+                if message.get("type") == "websocket.disconnect":
+                    raise WebSocketDisconnect
+                if message.get("bytes") is not None:
+                    await audio_queue.put(message["bytes"])
+                elif message.get("text") == "stop":
+                    await audio_queue.put(None)
+                    return
+                elif message.get("text") == "cancel":
+                    await audio_queue.put(None)
+                    return
+        finally:
+            # stop/cancel 或客户端掉线，都要给音频流一个明确的 EOF，
+            # 否则上游会话会一直挂着等新帧。
+            await audio_queue.put(None)
 
     receiver = asyncio.create_task(receive_audio())
     try:

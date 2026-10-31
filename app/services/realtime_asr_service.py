@@ -18,6 +18,10 @@ _SAMPLE_RATE = 16000
 _FINALIZE_TIMEOUT = 15.0
 # 已经拿到终稿后，再多等一会儿看有没有后续片段。
 _IDLE_TIMEOUT = 2.0
+# 上游会话被强制结束时最多自动重建几次。
+# Gemini Live 单连接约 10 分钟就会被服务端断开，长录音靠重建续命。
+_MAX_SESSION_RECONNECTS = 5
+_RECONNECT_BASE_SECONDS = 2.0
 
 
 class RealtimeASRService:
@@ -26,6 +30,10 @@ class RealtimeASRService:
     provider=gemini 走 Live API 的 BidiGenerateContent；
     provider=openai 走 OpenAI Realtime 协议。
     对前端统一输出 transcript / error / done 三种事件。
+
+    上游会话有硬性时长上限，到期会被服务端静默断开；客户端网络抖动
+    也会让前端重连。这里把收到的音频全部缓冲，上游会话非正常结束时
+    自动重建会话并从头重放，让长时间录音的转写不断档。
     """
 
     def __init__(self) -> None:
@@ -40,11 +48,88 @@ class RealtimeASRService:
         if not self.api_key:
             raise RuntimeError("实时转写未配置 API Key")
 
+        # 收到的所有音频帧，重连时从头重放给新的上游会话。
+        buffered: list[bytes] = []
+        # 客户端音频流结束（stop/cancel/掉线）后置位，会话正常收尾。
+        eof = asyncio.Event()
+        available = asyncio.Condition()
+
+        async def pump() -> None:
+            try:
+                async for frame in audio_frames:
+                    if not frame:
+                        continue
+                    async with available:
+                        buffered.append(frame)
+                        available.notify_all()
+            finally:
+                async with available:
+                    eof.set()
+                    available.notify_all()
+
+        pump_task = asyncio.create_task(pump())
+
+        def session_frames() -> AsyncIterator[bytes]:
+            """一个上游会话的音频来源：从头重放，随后跟着实时新帧。
+
+            会话之间只共享 [buffered]（按游标读），重建时从 0 再读一遍，
+            不丢帧也不重复。
+            """
+            async def generator():
+                index = 0
+                while True:
+                    async with available:
+                        while index >= len(buffered):
+                            if eof.is_set():
+                                return
+                            await available.wait()
+                    frame = buffered[index]
+                    index += 1
+                    yield frame
+
+            return generator()
+
+        attempt = 0
+        try:
+            while True:
+                ended_prematurely = False
+                try:
+                    async for event in self._run_provider(session_frames()):
+                        yield event
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    if eof.is_set():
+                        # 音频已经发完（收尾阶段）才出错：按原样抛给前端。
+                        raise
+                    logger.warning("实时转写上游会话中断，准备重建: %s", error)
+                    ended_prematurely = True
+
+                if eof.is_set():
+                    return
+
+                if not ended_prematurely:
+                    # 上游静默关闭（无异常），同样是会话到期的一种表现。
+                    logger.warning("实时转写上游会话被关闭，准备重建")
+
+                attempt += 1
+                if attempt > _MAX_SESSION_RECONNECTS:
+                    raise RuntimeError("实时转写上游会话多次中断，已放弃重连")
+                backoff = min(_RECONNECT_BASE_SECONDS * (2 ** (attempt - 1)), 8.0)
+                await asyncio.sleep(backoff)
+        finally:
+            pump_task.cancel()
+            await asyncio.gather(pump_task, return_exceptions=True)
+
+    async def _run_provider(
+        self,
+        frames: AsyncIterator[bytes],
+    ) -> AsyncIterator[dict[str, Any]]:
         if self.provider == "gemini":
-            async for event in self._transcribe_gemini(audio_frames):
+            async for event in self._transcribe_gemini(frames):
                 yield event
         else:
-            async for event in self._transcribe_openai(audio_frames):
+            async for event in self._transcribe_openai(frames):
                 yield event
 
     # ------------------------------------------------------------------
@@ -185,15 +270,30 @@ class RealtimeASRService:
     ) -> dict[str, Any] | None | Exception:
         """取下一个上游事件。
 
-        音频已经发完时，静默超过 timeout 就当结束，避免录音卡住不出结果。
+        发送端还在推音频时无限等；音频发完后给上游 timeout 秒吐最后的
+        转写，超时就当结束。发送端若在等待中途收尾（或出错），立刻切换
+        到限时等待，避免上游沉默时卡死。
         """
-        if not sender_task.done():
-            return await events.get()
-
+        queue_get = asyncio.create_task(events.get())
         try:
-            return await asyncio.wait_for(events.get(), timeout=timeout)
-        except TimeoutError:
-            return {"type": "done"}
+            if not sender_task.done():
+                await asyncio.wait(
+                    {queue_get, sender_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if queue_get.done():
+                    return queue_get.result()
+            sender_error = sender_task.exception()
+            if sender_error is not None:
+                raise sender_error
+            try:
+                return await asyncio.wait_for(queue_get, timeout=timeout)
+            except TimeoutError:
+                return {"type": "done"}
+        finally:
+            if not queue_get.done():
+                queue_get.cancel()
+                await asyncio.gather(queue_get, return_exceptions=True)
 
     # ------------------------------------------------------------------
     # OpenAI Realtime 协议
@@ -251,7 +351,9 @@ class RealtimeASRService:
             send_task = asyncio.create_task(self._send_audio(upstream, audio_frames))
             try:
                 while True:
-                    event = await events.get()
+                    event = await self._next_event(
+                        events, send_task, _FINALIZE_TIMEOUT
+                    )
                     if isinstance(event, Exception):
                         raise event
                     if event is None:
