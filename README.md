@@ -114,17 +114,17 @@ App 内置英文和简体中文作为离线兜底，并支持西班牙语、法�
 默认只有 **1MB**，稍长一点的录音就会触发 HTTP 413（Request Entity Too Large），
 客户端表现为保存语音笔记失败。
 
-在 `http {}` 或 `server {}` 块里加上大小限制（建议 70MB；应用默认图片 8MB、
-音频 64MB、文档 45MB，已经给 multipart 包装留出余量）：
+在 `http {}` 或 `server {}` 块里加上大小限制（建议 270MB；应用默认图片 8MB、
+音频 256MB、文档 45MB，已经给 multipart 包装留出余量）：
 
 ```nginx
 http {
     # 全局生效，所有 location 都继承
-    client_max_body_size 70M;
+    client_max_body_size 270M;
 
     server {
         # 也可以只在特定 server 里生效
-        client_max_body_size 70M;
+        client_max_body_size 270M;
 
         location /api/ {
             proxy_pass http://127.0.0.1:8000;
@@ -147,7 +147,7 @@ http {
 
 ```dotenv
 MAX_IMAGE_UPLOAD_MB=8
-MAX_AUDIO_UPLOAD_MB=64
+MAX_AUDIO_UPLOAD_MB=256
 MAX_FILE_UPLOAD_MB=45
 ```
 

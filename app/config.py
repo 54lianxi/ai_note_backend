@@ -40,9 +40,11 @@ class Settings(BaseSettings):
     LANGUAGE_PACK_CACHE_DIR: str = "/tmp/ai-record-language-packs"
 
     # 上传大小硬限制。前端会在请求前先校验；这里防止绕过客户端直传超大资源。
-    # 64MB 可容纳约 2 小时 19 分钟的 64kbps 录音；nginx 需同步放宽到 70MB。
+    # 实时转写保存的是原始 PCM WAV（16kHz/16bit，约 110MB/小时），
+    # 256MB 可容纳约 2 小时 19 分钟，与 64kbps AAC 的时长上限一致；
+    # nginx 需同步放宽到 270MB。
     MAX_IMAGE_UPLOAD_MB: int = Field(default=8, gt=0)
-    MAX_AUDIO_UPLOAD_MB: int = Field(default=64, gt=0)
+    MAX_AUDIO_UPLOAD_MB: int = Field(default=256, gt=0)
     MAX_FILE_UPLOAD_MB: int = Field(default=45, gt=0)
     # 单份文档最多抽取/索引的字符数，避免超大文件产生过多向量。
     MAX_DOCUMENT_TEXT_CHARS: int = Field(default=300_000, gt=0)
