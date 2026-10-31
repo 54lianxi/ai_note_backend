@@ -16,7 +16,7 @@ async def test_transient_asr_error_retries_with_backoff(monkeypatch):
     attempts = 0
     delays: list[float] = []
 
-    async def fake_transcribe(_data, _filename):
+    async def fake_transcribe(_path, _filename):
         nonlocal attempts
         attempts += 1
         if attempts < 3:
@@ -30,10 +30,10 @@ async def test_transient_asr_error_retries_with_backoff(monkeypatch):
     async def fake_sleep(delay):
         delays.append(delay)
 
-    monkeypatch.setattr(service, "_transcribe_gemini", fake_transcribe)
+    monkeypatch.setattr(service, "_transcribe_gemini_file", fake_transcribe)
     monkeypatch.setattr(asr_service.asyncio, "sleep", fake_sleep)
 
-    result = await service.transcribe(b"audio", "audio.wav")
+    result = await service.transcribe_file("audio.wav", "audio.wav")
 
     assert result == "转写成功"
     assert attempts == 3
@@ -46,7 +46,7 @@ async def test_non_retryable_asr_error_fails_immediately(monkeypatch):
     attempts = 0
     delays: list[float] = []
 
-    async def fake_transcribe(_data, _filename):
+    async def fake_transcribe(_path, _filename):
         nonlocal attempts
         attempts += 1
         raise ASRServiceError(
@@ -58,11 +58,11 @@ async def test_non_retryable_asr_error_fails_immediately(monkeypatch):
     async def fake_sleep(delay):
         delays.append(delay)
 
-    monkeypatch.setattr(service, "_transcribe_gemini", fake_transcribe)
+    monkeypatch.setattr(service, "_transcribe_gemini_file", fake_transcribe)
     monkeypatch.setattr(asr_service.asyncio, "sleep", fake_sleep)
 
     with pytest.raises(ASRServiceError, match="invalid api key"):
-        await service.transcribe(b"audio", "audio.wav")
+        await service.transcribe_file("audio.wav", "audio.wav")
 
     assert attempts == 1
     assert delays == []

@@ -37,6 +37,10 @@ class _Response:
     def read(self):
         return self.data
 
+    def stream(self, amount):
+        for start in range(0, len(self.data), amount):
+            yield self.data[start : start + amount]
+
     def close(self):
         self.closed = True
 

@@ -1,7 +1,7 @@
 """ASR 语音识别服务"""
 import asyncio
-import io
 import logging
+import os
 
 import httpx
 from openai import AsyncOpenAI
@@ -11,6 +11,10 @@ from app.core.http import build_async_client
 from app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
+
+# 分块上传的块大小和单次请求超时。长录音转写可能跑十几分钟，留够时间。
+_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+_TRANSCRIBE_TIMEOUT = 1800.0
 
 # 音频后缀到 MIME 类型的映射，Files API 需要显式声明。
 _MIME_TYPES = {
@@ -58,19 +62,23 @@ class ASRService:
             http_client=build_async_client(),
         )
 
-    async def transcribe(self, audio_data: bytes, filename: str = "audio.wav") -> str:
+    async def transcribe_file(
+        self,
+        path: str,
+        filename: str = "audio.wav",
+    ) -> str:
         """
-        将音频转为文字
-        :param audio_data: 音频字节数据
-        :param filename: 文件名
+        将磁盘上的音频文件转为文字。
+        :param path: 本地临时文件路径
+        :param filename: 原始文件名（用于判断 MIME 和展示）
         :return: 转写文本
         """
         attempts = settings.ASR_MAX_RETRIES + 1
         for attempt in range(attempts):
             try:
                 if self.provider == "gemini":
-                    return await self._transcribe_gemini(audio_data, filename)
-                return await self._transcribe_openai(audio_data, filename)
+                    return await self._transcribe_gemini_file(path, filename)
+                return await self._transcribe_openai_file(path, filename)
             except ASRServiceError as error:
                 if not error.retryable or attempt + 1 >= attempts:
                     raise
@@ -86,20 +94,19 @@ class ASRService:
 
         raise ASRServiceError("语音识别失败")
 
-    async def _transcribe_openai(self, audio_data: bytes, filename: str) -> str:
+    async def _transcribe_openai_file(self, path: str, filename: str) -> str:
         """调用 OpenAI 兼容的 /audio/transcriptions（Groq、OpenAI、硅基流动都适用）。"""
-        audio_file = io.BytesIO(audio_data)
-        audio_file.name = filename
-
-        params: dict = {"model": self.model, "file": audio_file}
+        params: dict = {"model": self.model}
         if settings.ASR_LANGUAGE:
             params["language"] = settings.ASR_LANGUAGE
 
         try:
-            response = await self.client.audio.transcriptions.create(
-                response_format="text",
-                **params,
-            )
+            with open(path, "rb") as audio_file:
+                response = await self.client.audio.transcriptions.create(
+                    response_format="text",
+                    file=(filename, audio_file),
+                    **params,
+                )
         except Exception as error:
             status_code = getattr(error, "status_code", None)
             retryable = (
@@ -116,47 +123,56 @@ class ASRService:
 
         return str(response).strip()
 
-    async def _transcribe_gemini(self, audio_data: bytes, filename: str) -> str:
-        """先上传到 Files API，再交给 gemini-3.5-transcribe 转写。
+    async def _upload_gemini_file(
+        self,
+        client: httpx.AsyncClient,
+        upload_base: str,
+        headers: dict[str, str],
+        path: str,
+        filename: str,
+        mime_type: str,
+        size: int,
+    ) -> dict:
+        """按块流式上传到 Files API，长录音不经过内存。"""
+        start = await client.post(
+            f"{upload_base}/files",
+            headers={
+                **headers,
+                "X-Goog-Upload-Protocol": "resumable",
+                "X-Goog-Upload-Command": "start",
+                "X-Goog-Upload-Header-Content-Length": str(size),
+                "X-Goog-Upload-Header-Content-Type": mime_type,
+                "Content-Type": "application/json",
+            },
+            json={"file": {"display_name": filename}},
+        )
+        upload_url = start.headers.get("x-goog-upload-url")
+        if not upload_url:
+            raise ASRServiceError(
+                f"创建上传会话失败 {start.status_code}: {start.text[:200]}",
+                status_code=start.status_code,
+                retryable=self._retryable_status(start.status_code),
+            )
 
-        这个模型只在 /v1beta/interactions 上提供，且只接受文件 URI，
-        所以是「上传 + 建 interaction」两步。
-        """
-        mime_type = self._guess_mime_type(filename)
-        upload_base = self.base_url.replace("/v1beta", "/upload/v1beta")
-        headers = {"x-goog-api-key": self.api_key}
-        file_name: str | None = None
-
-        try:
-            async with build_async_client(300) as client:
-                start = await client.post(
-                    f"{upload_base}/files",
-                    headers={
-                        **headers,
-                        "X-Goog-Upload-Protocol": "resumable",
-                        "X-Goog-Upload-Command": "start",
-                        "X-Goog-Upload-Header-Content-Length": str(len(audio_data)),
-                        "X-Goog-Upload-Header-Content-Type": mime_type,
-                        "Content-Type": "application/json",
-                    },
-                    json={"file": {"display_name": filename}},
-                )
-                upload_url = start.headers.get("x-goog-upload-url")
-                if not upload_url:
-                    raise ASRServiceError(
-                        f"创建上传会话失败 {start.status_code}: {start.text[:200]}",
-                        status_code=start.status_code,
-                        retryable=self._retryable_status(start.status_code),
-                    )
-
+        offset = 0
+        uploaded = start
+        with open(path, "rb") as source:
+            while True:
+                chunk = await asyncio.to_thread(source.read, _UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                offset += len(chunk)
+                final = offset >= size
                 uploaded = await client.post(
                     upload_url,
                     headers={
-                        "Content-Length": str(len(audio_data)),
-                        "X-Goog-Upload-Offset": "0",
-                        "X-Goog-Upload-Command": "upload, finalize",
+                        "Content-Length": str(len(chunk)),
+                        "X-Goog-Upload-Offset": str(offset - len(chunk)),
+                        "X-Goog-Upload-Command": (
+                            "upload, finalize" if final else "upload"
+                        ),
                     },
-                    content=audio_data,
+                    content=chunk,
                 )
                 if uploaded.status_code >= 400:
                     raise ASRServiceError(
@@ -164,7 +180,34 @@ class ASRService:
                         status_code=uploaded.status_code,
                         retryable=self._retryable_status(uploaded.status_code),
                     )
-                file_info = (uploaded.json() or {}).get("file") or {}
+
+        return (uploaded.json() or {}).get("file") or {}
+
+    async def _transcribe_gemini_file(self, path: str, filename: str) -> str:
+        """先上传到 Files API，再交给 gemini-3.5-transcribe 转写。
+
+        这个模型只在 /v1beta/interactions 上提供，且只接受文件 URI，
+        所以是「上传 + 建 interaction」两步。上传按 8MB 分块，内存占用恒定。
+        """
+        mime_type = self._guess_mime_type(filename)
+        upload_base = self.base_url.replace("/v1beta", "/upload/v1beta")
+        headers = {"x-goog-api-key": self.api_key}
+        size = os.path.getsize(path)
+        file_name: str | None = None
+        if size == 0:
+            raise ASRServiceError("音频为空")
+
+        try:
+            async with build_async_client(_TRANSCRIBE_TIMEOUT) as client:
+                file_info = await self._upload_gemini_file(
+                    client,
+                    upload_base,
+                    headers,
+                    path,
+                    filename,
+                    mime_type,
+                    size,
+                )
                 file_uri = file_info.get("uri")
                 file_name = file_info.get("name")
                 if not file_uri:
@@ -256,9 +299,9 @@ class ASRService:
     def _retryable_status(status_code: int) -> bool:
         return status_code == 429 or status_code >= 500
 
-    async def transcribe_with_summary(
+    async def transcribe_with_summary_file(
         self,
-        audio_data: bytes,
+        path: str,
         filename: str = "audio.wav",
         language: str | None = None,
     ) -> dict:
@@ -266,7 +309,7 @@ class ASRService:
         语音转文字并生成摘要
         :return: {"text": "原始文本", "summary": "摘要"}
         """
-        text = await self.transcribe(audio_data, filename)
+        text = await self.transcribe_file(path, filename)
         summary = ""
         if text:
             try:

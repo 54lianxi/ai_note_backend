@@ -4,6 +4,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
@@ -30,7 +31,9 @@ class RecordState:
     content_type: Literal["text", "voice", "image", "file"]
     content: str = ""  # 文本内容或处理后的文本
     language: str | None = None  # 模型生成内容（图片描述等）的语言
-    file_data: bytes | None = None  # 原始文件数据
+    file_data: bytes | None = None  # 原始文件数据（图片、文档）
+    file_path: str = ""  # 语音的临时文件，流式上传，避免整段进内存
+    file_size: int = 0  # 语音文件字节数
     filename: str = ""
     content_type_header: str = ""  # HTTP Content-Type
     
@@ -67,13 +70,15 @@ async def process_voice_node(state: RecordState) -> dict:
     不完整时被当成最终内容。
     """
     # 1. 保存原始音频，记录详情页可以回放（失败不影响记录本身）。
-    if state.file_data:
+    # 从临时文件流式上传，长录音不占内存，也不阻塞事件循环。
+    if state.file_path:
         try:
             minio = get_minio_client()
-            state.file_url = minio.upload_file(
-                state.file_data,
+            state.file_url = await asyncio.to_thread(
+                minio.upload_file_from_path,
+                state.file_path,
                 state.content_type_header or "audio/wav",
-                filename=state.filename or None,
+                state.filename or None,
             )
         except Exception:
             logger.exception("语音上传对象存储失败，继续保存录音记录元数据")
@@ -258,7 +263,9 @@ async def store_node(state: RecordState) -> dict:
             file_url=state.file_url or None,
             file_name=state.filename or None,
             file_content_type=state.content_type_header or None,
-            file_size=len(state.file_data) if state.file_data else None,
+            file_size=state.file_size or (
+                len(state.file_data) if state.file_data else None
+            ),
         )
         session.add(record)
         
@@ -335,6 +342,8 @@ async def execute_record_workflow(
     conversation_id: str = "",  # 笔记已与对话解耦，仅为兼容旧客户端保留
     content: str = "",
     file_data: bytes | None = None,
+    file_path: str = "",
+    file_size: int = 0,
     filename: str = "",
     content_type_header: str = "",
     language: str | None = None,
@@ -345,6 +354,8 @@ async def execute_record_workflow(
         content_type=content_type,
         content=content,
         file_data=file_data,
+        file_path=file_path,
+        file_size=file_size,
         filename=filename,
         content_type_header=content_type_header,
         language=language,
@@ -359,7 +370,7 @@ async def execute_record_workflow(
 async def transcribe_voice_record(
     record_id: str,
     user_id: str,
-    file_data: bytes,
+    file_path: str,
     filename: str,
     language: str | None = None,
 ) -> None:
@@ -367,13 +378,14 @@ async def transcribe_voice_record(
 
     由保存接口用 FastAPI BackgroundTasks 调度，所以保存请求本身不等转写。
     转写失败只把状态标记为 failed，记录和音频都保留，用户可回放音频。
+    临时文件在 ASR 结束后立即删除，不占服务器磁盘。
     """
     status = "done"
     text = ""
     summary: str | None = None
     try:
-        result = await ASRService().transcribe_with_summary(
-            file_data,
+        result = await ASRService().transcribe_with_summary_file(
+            file_path,
             filename,
             language=language,
         )
@@ -382,6 +394,8 @@ async def transcribe_voice_record(
     except Exception:
         status = "failed"
         logger.exception("语音记录后台转写失败，record_id=%s", record_id)
+    finally:
+        await asyncio.to_thread(Path(file_path).unlink, True)
 
     vector_id = None
     if text:

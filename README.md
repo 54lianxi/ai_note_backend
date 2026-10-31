@@ -122,17 +122,17 @@ App 内置英文和简体中文作为离线兜底，并支持西班牙语、法�
 默认只有 **1MB**，稍长一点的录音就会触发 HTTP 413（Request Entity Too Large），
 客户端表现为保存语音笔记失败。
 
-在 `http {}` 或 `server {}` 块里加上大小限制（建议 270MB；应用默认图片 8MB、
-音频 256MB、文档 45MB，已经给 multipart 包装留出余量）：
+在 `http {}` 或 `server {}` 块里加上大小限制（建议 620MB；音频只留防滥用兜底，
+客户端限制单次录音 4 小时，4 小时实时 PCM WAV 约 460MB）：
 
 ```nginx
 http {
     # 全局生效，所有 location 都继承
-    client_max_body_size 270M;
+    client_max_body_size 620M;
 
     server {
         # 也可以只在特定 server 里生效
-        client_max_body_size 270M;
+        client_max_body_size 620M;
 
         location /api/ {
             proxy_pass http://127.0.0.1:8000;
@@ -155,13 +155,14 @@ http {
 
 ```dotenv
 MAX_IMAGE_UPLOAD_MB=8
-MAX_AUDIO_UPLOAD_MB=256
+MAX_AUDIO_UPLOAD_MB=600
 MAX_FILE_UPLOAD_MB=45
 ```
 
-前端可通过同名的 `--dart-define` 覆盖，后端通过 `.env` 覆盖。调整时要保证：
-前端上限 ≤ 后端上限 < nginx `client_max_body_size`。后端对超限请求返回 HTTP 413，
-前端也会在发起请求前直接提示，不会把超大文件放进离线队列。
+图片和文档仍由前端在请求前校验。录音不再按文件大小限制：客户端限制单次
+4 小时，上传时后端把它流式写到临时文件、再流式推进 MinIO，转写按块上传，
+内存占用与录音长度无关。`MAX_AUDIO_UPLOAD_MB` 只是绕过客户端时的兜底，
+nginx 的 `client_max_body_size` 要高于它。
 
 ## 文档正文检索
 

@@ -1,8 +1,11 @@
 """记录上传和记录管理接口"""
 import asyncio
 import logging
+import os
+import tempfile
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
 
@@ -53,6 +56,53 @@ from app.workflows.record_workflow import (
 router = APIRouter(tags=["记录管理"])
 logger = logging.getLogger(__name__)
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+
+class _UploadTooLarge(Exception):
+    """流式拷贝时超过兜底体积上限。"""
+
+
+def _copy_upload_to_temp(file: UploadFile, max_bytes: int) -> tuple[str, int]:
+    """把上传内容流式写到临时文件，长录音不占进程内存。"""
+    suffix = Path(file.filename or "").suffix or ".audio"
+    fd, path = tempfile.mkstemp(prefix="voice-", suffix=suffix)
+    size = 0
+    try:
+        with os.fdopen(fd, "wb") as target:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise _UploadTooLarge
+                target.write(chunk)
+    except BaseException:
+        Path(path).unlink(missing_ok=True)
+        raise
+    return path, size
+
+
+async def _spool_voice_upload(
+    file: UploadFile,
+    max_mb: int,
+    language: str | None,
+) -> tuple[str, int]:
+    """语音落临时文件，返回路径和字节数。上限只作防滥用兜底，不展示给用户。"""
+    max_bytes = max_mb * 1024 * 1024
+    if file.size is not None and file.size > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=t(language, "upload_too_large", limit=max_mb),
+        )
+    try:
+        return await asyncio.to_thread(_copy_upload_to_temp, file, max_bytes)
+    except _UploadTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=t(language, "upload_too_large", limit=max_mb),
+        ) from exc
+
+
+def _remove_temp_file(path: str) -> None:
+    Path(path).unlink(missing_ok=True)
 
 
 async def _read_upload(file: UploadFile, max_mb: int, language: str | None) -> bytes:
@@ -211,27 +261,35 @@ async def create_voice_record(
             detail=t(language, "subscription_rate_limit", limit=FREE_VOICE_NOTE_LIMIT),
         )
 
+    file_path, file_size = await _spool_voice_upload(
+        file,
+        settings.MAX_AUDIO_UPLOAD_MB,
+        language,
+    )
+    owns_file = True
     try:
-        file_data = await _read_upload(file, settings.MAX_AUDIO_UPLOAD_MB, language)
         result = await execute_record_workflow(
             user_id=user_id,
             conversation_id=conversation_id or "",
             content_type="voice",
             content="",
-            file_data=file_data,
+            file_path=file_path,
+            file_size=file_size,
             filename=file.filename or "audio.wav",
             content_type_header=file.content_type,
             language=language,
         )
-        if result.transcription_status == "pending" and file_data:
+        if result.transcription_status == "pending":
+            # 临时文件交给后台转写任务，由它收尾删除。
             background_tasks.add_task(
                 transcribe_voice_record,
                 record_id=result.record_id,
                 user_id=user_id,
-                file_data=file_data,
+                file_path=file_path,
                 filename=file.filename or "audio.wav",
                 language=language,
             )
+            owns_file = False
         return _workflow_response(result, language)
     except HTTPException:
         raise
@@ -246,6 +304,9 @@ async def create_voice_record(
         raise HTTPException(
             status_code=500, detail=t(language, "voice_record_failed", error=e)
         ) from e
+    finally:
+        if owns_file:
+            await asyncio.to_thread(_remove_temp_file, file_path)
 
 
 @router.post("/records/image", response_model=RecordResponse)
@@ -512,18 +573,29 @@ async def retry_transcription(
         )
     minio = get_minio_client()
 
-    def read_audio() -> bytes:
+    def download_audio() -> str:
+        """从对象存储流式落到临时文件，长录音不经过内存。"""
+        suffix = Path(record.file_name or "").suffix or ".audio"
+        fd, path = tempfile.mkstemp(prefix="retry-", suffix=suffix)
+        target = os.fdopen(fd, "wb")
         response = None
         try:
             response = minio.client.get_object(minio.bucket, object_name)
-            return response.read()
+            for chunk in response.stream(1024 * 1024):
+                target.write(chunk)
+            target.close()
+        except BaseException:
+            target.close()
+            Path(path).unlink(missing_ok=True)
+            raise
         finally:
             if response is not None:
                 response.close()
                 response.release_conn()
+        return path
 
     try:
-        file_data = await asyncio.to_thread(read_audio)
+        file_path = await asyncio.to_thread(download_audio)
     except Exception as exc:
         logger.warning("手动转写读取录音失败: %s", record_id, exc_info=True)
         raise HTTPException(
@@ -531,15 +603,20 @@ async def retry_transcription(
             detail=t(language, "audio_not_found"),
         ) from exc
 
-    record.transcription_status = "pending"
-    record.manual_transcription_count += 1
-    record.updated_at = datetime.now(UTC)
-    await db.commit()
+    try:
+        record.transcription_status = "pending"
+        record.manual_transcription_count += 1
+        record.updated_at = datetime.now(UTC)
+        await db.commit()
+    except BaseException:
+        await asyncio.to_thread(_remove_temp_file, file_path)
+        raise
+
     background_tasks.add_task(
         transcribe_voice_record,
         record_id=str(record.id),
         user_id=user_id,
-        file_data=file_data,
+        file_path=file_path,
         filename=record.file_name or "audio.wav",
         language=language,
     )

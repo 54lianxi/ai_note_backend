@@ -1,6 +1,7 @@
 """MinIO 对象存储客户端"""
 import io
 import json
+from pathlib import Path
 from uuid import uuid4
 from minio import Minio
 from minio.error import S3Error
@@ -72,7 +73,29 @@ class MinIOClient:
         )
         
         return self.get_url(object_name)
-    
+
+    def upload_file_from_path(
+        self,
+        path: str,
+        content_type: str,
+        filename: str | None = None,
+    ) -> str:
+        """从磁盘流式上传，长录音不经过内存。"""
+        ext = Path(path).suffix or self._get_extension(content_type)
+        object_name = f"records/{filename or f'{uuid4()}{ext}'}"
+        size = Path(path).stat().st_size
+
+        with open(path, "rb") as source:
+            self.client.put_object(
+                self.bucket,
+                object_name,
+                source,
+                length=size,
+                content_type=content_type,
+            )
+
+        return self.get_url(object_name)
+
     def get_url(self, object_name: str) -> str:
         """获取对象访问 URL"""
         scheme = "https" if settings.MINIO_SECURE else "http"

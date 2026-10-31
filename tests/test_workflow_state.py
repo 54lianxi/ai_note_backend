@@ -201,7 +201,7 @@ def _patch_voice_pipeline(monkeypatch, *, transcript, summary):
     """把后台转写依赖的服务全部换成假实现。"""
 
     class FakeAsr:
-        async def transcribe_with_summary(self, _data, _filename, **_kwargs):
+        async def transcribe_with_summary_file(self, _path, _filename, **_kwargs):
             if isinstance(transcript, Exception):
                 raise transcript
             return {"text": transcript, "summary": summary}
@@ -223,21 +223,24 @@ def _patch_voice_pipeline(monkeypatch, *, transcript, summary):
 
 
 @pytest.mark.asyncio
-async def test_background_transcription_writes_back(monkeypatch):
+async def test_background_transcription_writes_back(monkeypatch, tmp_path):
     _patch_voice_pipeline(monkeypatch, transcript="明天十点评审会", summary="评审会")
     record = _FakeRecord()
     session = _FakeSession(record)
     monkeypatch.setattr(
         record_module, "async_session_factory", _FakeSessionFactory(session)
     )
+    audio_path = tmp_path / "audio.wav"
+    audio_path.write_bytes(b"audio")
 
     await record_module.transcribe_voice_record(
         record_id="11111111-1111-1111-1111-111111111111",
         user_id="00000000-0000-0000-0000-000000000001",
-        file_data=b"audio",
+        file_path=str(audio_path),
         filename="audio.wav",
     )
 
+    assert audio_path.exists() is False
     assert record.content == "明天十点评审会"
     assert record.summary == "评审会"
     assert record.transcription_status == "done"
@@ -247,7 +250,7 @@ async def test_background_transcription_writes_back(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_background_transcription_failure_keeps_record(monkeypatch):
+async def test_background_transcription_failure_keeps_record(monkeypatch, tmp_path):
     from app.services.asr_service import ASRServiceError
 
     _patch_voice_pipeline(
@@ -258,14 +261,17 @@ async def test_background_transcription_failure_keeps_record(monkeypatch):
     monkeypatch.setattr(
         record_module, "async_session_factory", _FakeSessionFactory(session)
     )
+    audio_path = tmp_path / "audio.wav"
+    audio_path.write_bytes(b"audio")
 
     await record_module.transcribe_voice_record(
         record_id="11111111-1111-1111-1111-111111111111",
         user_id="00000000-0000-0000-0000-000000000001",
-        file_data=b"audio",
+        file_path=str(audio_path),
         filename="audio.wav",
     )
 
+    assert audio_path.exists() is False
     assert record.transcription_status == "failed"
     assert record.vector_id is None
     assert record.updated_at is not None
