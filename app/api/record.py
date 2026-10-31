@@ -192,12 +192,12 @@ async def create_voice_record(
     language: LanguageDep,
     background_tasks: BackgroundTasks,
     conversation_id: Annotated[str | None, Form()] = None,
-    transcribed_text: Annotated[str | None, Form()] = None,
 ):
     """上传语音记录。
 
-    保存请求只做存储：客户端带转写文本（实时转写）时直接入库；否则先落库并把
-    转写交给后台任务，保存接口立刻返回，不再把 ASR 耗时算进「保存笔记」。
+    保存请求只做存储：先把记录落库并返回，转写交给后台任务用整段音频完成。
+    这样实时转写断开或长录音识别不完整时，最终笔记内容仍然完整。
+    保存接口不再把 ASR 耗时算进「保存笔记」。
 
     免费用户最多保存 3 段音频笔记，超出时返回 402，客户端据此引导订阅。
     """
@@ -217,7 +217,7 @@ async def create_voice_record(
             user_id=user_id,
             conversation_id=conversation_id or "",
             content_type="voice",
-            content=transcribed_text or "",
+            content="",
             file_data=file_data,
             filename=file.filename or "audio.wav",
             content_type_header=file.content_type,

@@ -19,8 +19,9 @@ _FINALIZE_TIMEOUT = 15.0
 # 已经拿到终稿后，再多等一会儿看有没有后续片段。
 _IDLE_TIMEOUT = 2.0
 # 上游会话被强制结束时最多自动重建几次。
-# Gemini Live 单连接约 10 分钟就会被服务端断开，长录音靠重建续命。
-_MAX_SESSION_RECONNECTS = 5
+# Gemini Live 单连接约 10 分钟就会被服务端断开，长录音靠重建续命；
+# 重建时只接着发还没发出去的音频，不会把整段录音重新识别一遍。
+_MAX_SESSION_RECONNECTS = 30
 _RECONNECT_BASE_SECONDS = 2.0
 
 
@@ -32,8 +33,9 @@ class RealtimeASRService:
     对前端统一输出 transcript / error / done 三种事件。
 
     上游会话有硬性时长上限，到期会被服务端静默断开；客户端网络抖动
-    也会让前端重连。这里把收到的音频全部缓冲，上游会话非正常结束时
-    自动重建会话并从头重放，让长时间录音的转写不断档。
+    也会让前端重连。这里把已确认发出的音频位置和已完成的转写片段保留下来，
+    上游会话非正常结束时只重建会话并接着发剩余音频，让长时间录音的转写
+    不断档，也不会把已经显示的文字从头覆盖一遍。
     """
 
     def __init__(self) -> None:
@@ -48,8 +50,12 @@ class RealtimeASRService:
         if not self.api_key:
             raise RuntimeError("实时转写未配置 API Key")
 
-        # 收到的所有音频帧，重连时从头重放给新的上游会话。
+        # 收到的所有音频帧。新会话只从 [next_index] 继续，不重放历史音频。
         buffered: list[bytes] = []
+        # 下一帧要发给上游的位置：只有确认发完的帧才推进，断线时最多重发一帧。
+        next_index = 0
+        # 跨上游会话累积的终稿片段，重建后继续往后拼，不会从头再来。
+        segments: list[str] = []
         # 客户端音频流结束（stop/cancel/掉线）后置位，会话正常收尾。
         eof = asyncio.Event()
         available = asyncio.Condition()
@@ -70,13 +76,14 @@ class RealtimeASRService:
         pump_task = asyncio.create_task(pump())
 
         def session_frames() -> AsyncIterator[bytes]:
-            """一个上游会话的音频来源：从头重放，随后跟着实时新帧。
+            """一个上游会话的音频来源：从上次发到的位置继续，随后跟着新帧。
 
-            会话之间只共享 [buffered]（按游标读），重建时从 0 再读一遍，
-            不丢帧也不重复。
+            [next_index] 在发送方取走下一帧时才推进，所以若会话在发送途中
+            断开，最多只会把最后一帧再发一次，不会漏掉整段音频。
             """
             async def generator():
-                index = 0
+                nonlocal next_index
+                index = next_index
                 while True:
                     async with available:
                         while index >= len(buffered):
@@ -84,8 +91,10 @@ class RealtimeASRService:
                                 return
                             await available.wait()
                     frame = buffered[index]
-                    index += 1
                     yield frame
+                    # 发送方已经处理完这一帧（发出或退出）后才会走到这里。
+                    next_index = index + 1
+                    index += 1
 
             return generator()
 
@@ -94,7 +103,9 @@ class RealtimeASRService:
             while True:
                 ended_prematurely = False
                 try:
-                    async for event in self._run_provider(session_frames()):
+                    async for event in self._run_provider(
+                        session_frames(), segments
+                    ):
                         yield event
                 except asyncio.CancelledError:
                     raise
@@ -110,7 +121,7 @@ class RealtimeASRService:
 
                 if not ended_prematurely:
                     # 上游静默关闭（无异常），同样是会话到期的一种表现。
-                    logger.warning("实时转写上游会话被关闭，准备重建")
+                    logger.info("实时转写上游会话到期，从断点继续")
 
                 attempt += 1
                 if attempt > _MAX_SESSION_RECONNECTS:
@@ -124,12 +135,13 @@ class RealtimeASRService:
     async def _run_provider(
         self,
         frames: AsyncIterator[bytes],
+        segments: list[str],
     ) -> AsyncIterator[dict[str, Any]]:
         if self.provider == "gemini":
-            async for event in self._transcribe_gemini(frames):
+            async for event in self._transcribe_gemini(frames, segments):
                 yield event
         else:
-            async for event in self._transcribe_openai(frames):
+            async for event in self._transcribe_openai(frames, segments):
                 yield event
 
     # ------------------------------------------------------------------
@@ -138,10 +150,10 @@ class RealtimeASRService:
     async def _transcribe_gemini(
         self,
         audio_frames: AsyncIterator[bytes],
+        segments: list[str],
     ) -> AsyncIterator[dict[str, Any]]:
         separator = "&" if "?" in settings.ASR_REALTIME_URL else "?"
         upstream_url = f"{settings.ASR_REALTIME_URL}{separator}key={self.api_key}"
-        segments: list[str] = []
 
         async with websockets.connect(
             upstream_url,
@@ -301,7 +313,10 @@ class RealtimeASRService:
     async def _transcribe_openai(
         self,
         audio_frames: AsyncIterator[bytes],
+        segments: list[str],
     ) -> AsyncIterator[dict[str, Any]]:
+        # OpenAI 实时协议按增量片段下发，这里不需要跨会话拼接文本。
+        del segments
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "OpenAI-Beta": "realtime=v1",

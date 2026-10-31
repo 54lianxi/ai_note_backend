@@ -16,7 +16,6 @@ from app.models.record import Record
 from app.services.asr_service import ASRService
 from app.services.document_service import extract_document_text
 from app.services.embedding_service import EmbeddingService
-from app.services.llm_service import LLMService
 from app.services.text_index import EMBED_BATCH_SIZE, split_text_chunks
 from app.services.vision_service import VisionService
 
@@ -36,7 +35,6 @@ class RecordState:
     content_type_header: str = ""  # HTTP Content-Type
     
     # 中间状态
-    transcribed_text: str = ""  # ASR 转写结果
     image_key_info: dict = field(default_factory=dict)  # 视觉模型提取的信息
     image_url: str = ""  # MinIO 图片 URL
     file_url: str = ""  # MinIO 通用附件 URL
@@ -63,10 +61,10 @@ async def process_text_node(state: RecordState) -> dict:
 
 
 async def process_voice_node(state: RecordState) -> dict:
-    """处理语音输入：音频存对象存储。
+    """处理语音输入：音频存对象存储，转写统一交给保存后的后台任务。
 
-    客户端已经带转写文本（实时转写）时直接用它的结果；否则保存请求立即返回，
-    等后台任务再做 ASR，避免把转写耗时算进「保存笔记」。
+    保存接口立即返回，后台用整段音频转写，避免长录音的实时转写结果
+    不完整时被当成最终内容。
     """
     # 1. 保存原始音频，记录详情页可以回放（失败不影响记录本身）。
     if state.file_data:
@@ -80,28 +78,13 @@ async def process_voice_node(state: RecordState) -> dict:
         except Exception:
             logger.exception("语音上传对象存储失败，继续保存录音记录元数据")
 
-    if state.content.strip():
-        text = state.content.strip()
-        try:
-            summary = await LLMService().summarize_record(text, state.language)
-        except Exception:
-            logger.warning("实时转写语音摘要生成失败", exc_info=True)
-            summary = f"{text[:100]}..." if len(text) > 100 else ""
-        status = "done"
-    else:
-        text = ""
-        summary = ""
-        status = "pending"
-
-    state.content = text
-    state.summary = summary
-    state.transcribed_text = text
-    state.transcription_status = status
+    state.content = ""
+    state.summary = ""
+    state.transcription_status = "pending"
     return {
-        "content": text,
-        "summary": summary,
-        "transcribed_text": text,
-        "transcription_status": status,
+        "content": state.content,
+        "summary": state.summary,
+        "transcription_status": state.transcription_status,
         "file_url": state.file_url,
     }
 

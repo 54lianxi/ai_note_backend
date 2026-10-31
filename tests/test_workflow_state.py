@@ -114,21 +114,14 @@ async def test_process_voice_node_defers_transcription_without_text(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_process_voice_node_uses_client_transcript(monkeypatch):
-    """实时转写的结果直接用，状态直接是完成。"""
+async def test_process_voice_node_ignores_client_transcript(monkeypatch):
+    """语音保存不再信任客户端预览，统一由后台按整段音频转写。"""
 
     class FailingAsrService:
         def __init__(self):
-            raise AssertionError("已有转写文本时不应该再调 ASR")
-
-    class FakeLlmService:
-        async def summarize_record(self, text, language):
-            assert text == "今天的会议记录"
-            assert language == "zh"
-            return "会议内容已记录。"
+            raise AssertionError("保存流程不应该同步调用 ASR")
 
     monkeypatch.setattr(record_module, "ASRService", FailingAsrService)
-    monkeypatch.setattr(record_module, "LLMService", FakeLlmService)
 
     state = record_module.RecordState(
         user_id="00000000-0000-0000-0000-000000000001",
@@ -139,9 +132,9 @@ async def test_process_voice_node_uses_client_transcript(monkeypatch):
 
     result = await record_module.process_voice_node(state)
 
-    assert result["content"] == "今天的会议记录"
-    assert result["summary"] == "会议内容已记录。"
-    assert result["transcription_status"] == "done"
+    assert result["content"] == ""
+    assert result["summary"] == ""
+    assert result["transcription_status"] == "pending"
 
 
 @pytest.mark.asyncio
