@@ -13,7 +13,7 @@ from app.services.llm_service import LLMService
 router = APIRouter(tags=["App"])
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 _LANGUAGE_PACK_DIR = _STATIC_DIR / "language_packs"
-_SUPPORTED_LANGUAGES = {
+SUPPORTED_LANGUAGES = {
     "en",
     "zh",
     "es",
@@ -74,7 +74,7 @@ async def get_app_version() -> AppVersionResponse:
 async def get_language_pack(language: str):
     """返回按需翻译并缓存的 UI 语言包，客户端只在首次下载。"""
     code = language.lower()
-    if code not in _SUPPORTED_LANGUAGES:
+    if code not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=404, detail="Unsupported language")
 
     static_file = _LANGUAGE_PACK_DIR / f"{code}.json"

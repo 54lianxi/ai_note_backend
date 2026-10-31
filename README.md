@@ -100,13 +100,21 @@ SUBSCRIPTION_MONTHLY_PRODUCT_ID=note_sub_month_2.99
 
 App 内置英文和简体中文作为离线兜底，并支持西班牙语、法语、德语、葡萄牙语、
 意大利语、日语、韩语、俄语、阿拉伯语、印地语、印尼语、土耳其语、越南语和泰语。
-首次使用某语言时，客户端请求 `GET /api/v1/app/language-packs/{language}`，
-服务端生成并缓存完整语言包；后续启动直接读本地缓存。
+客户端按需请求 `GET /api/v1/app/language-packs/{language}`。现在受支持的语言都在
+`backend/app/static/language_packs/` 里有完整静态包，接口直接返回它；只有静态包
+缺失的语言才会用 `LLMService` 现场翻译并缓存到 `LANGUAGE_PACK_CACHE_DIR`
+（默认 `/tmp/ai-record-language-packs`）。
 
-缓存目录默认是 `/tmp/ai-record-language-packs`，可通过
-`LANGUAGE_PACK_CACHE_DIR` 改到持久卷。首次生成某种语言需要配置
-`LLM_API_KEY`；也可以提前请求一次，把生成结果放进
-`backend/app/static/language_packs/`，避免上线后首次请求等待。
+修改 ARB 后先在 `front/` 执行 `python3 tool/generate_l10n.py` 更新 en/zh，
+再在 `backend/` 执行：
+
+```bash
+.venv/bin/python scripts/generate_language_packs.py            # 补齐缺失键
+.venv/bin/python scripts/generate_language_packs.py ja --refresh voiceExport
+```
+
+不带语言参数时处理所有已有静态包的非中英文语言；`--refresh` 用于英文文案
+改过、需要强制重翻的键。静态包必须完整，否则会遮蔽运行时生成的整包。
 
 ## 部署：nginx 必须放宽请求体大小限制
 
