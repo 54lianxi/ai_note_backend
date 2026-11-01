@@ -37,6 +37,16 @@ class Record(Base):
     transcription_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="done", server_default="done"
     )
+    # 后台转写的失联原因码（timeout / rate_limited / unavailable / failed / stalled），
+    # 只在 status=failed 时有值，前端按码本地化展示。
+    transcription_error: Mapped[str | None] = mapped_column(
+        String(40), nullable=True
+    )
+    # 后台转写任务的心跳时间。任务活着就定期刷新，
+    # 用来区分「长录音还在正常转」和「执行任务的进程已经没了」。
+    transcription_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     manual_transcription_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )

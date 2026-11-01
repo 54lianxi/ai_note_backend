@@ -3,13 +3,16 @@
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
+from sqlalchemy import update
 
+from app.config import settings
 from app.core.i18n import t
 from app.infrastructure.database import async_session_factory
 from app.infrastructure.minio_client import get_minio_client
@@ -378,12 +381,39 @@ async def execute_record_workflow(
     return RecordState(**result)
 
 
+async def _write_transcription_heartbeat(record_id: str) -> None:
+    """刷一次心跳，证明这条后台转写还在跑。
+
+    长录音要跑十几到几十分钟，读接口靠心跳区分「还在正常转」和
+    「执行任务的进程已经没了」，所以任务活着就必须定期写这个时间。
+    """
+    async with async_session_factory() as session:
+        await session.execute(
+            update(Record)
+            .where(Record.id == uuid.UUID(record_id))
+            .values(transcription_heartbeat_at=datetime.now(UTC))
+        )
+        await session.commit()
+
+
+async def _transcription_heartbeat_loop(record_id: str) -> None:
+    interval = settings.TRANSCRIPTION_HEARTBEAT_SECONDS
+    while True:
+        try:
+            await _write_transcription_heartbeat(record_id)
+        except Exception:
+            # 数据库抖动不该打断转写，下个周期再试。
+            logger.warning("转写心跳写入失败，record_id=%s", record_id, exc_info=True)
+        await asyncio.sleep(interval)
+
+
 async def transcribe_voice_record(
     record_id: str,
     user_id: str,
     file_path: str,
     filename: str,
     language: str | None = None,
+    reason_mapper: Callable[[Exception], str] | None = None,
 ) -> None:
     """保存语音记录后的后台转写：ASR → 向量化 → 回写记录。
 
@@ -394,6 +424,8 @@ async def transcribe_voice_record(
     status = "done"
     text = ""
     summary: str | None = None
+    error_reason: str | None = None
+    heartbeat = asyncio.create_task(_transcription_heartbeat_loop(record_id))
     try:
         result = await ASRService().transcribe_with_summary_file(
             file_path,
@@ -402,10 +434,13 @@ async def transcribe_voice_record(
         )
         text = (result.get("text") or "").strip()
         summary = result.get("summary") or None
-    except Exception:
+    except Exception as exc:
         status = "failed"
+        error_reason = reason_mapper(exc) if reason_mapper else "failed"
         logger.exception("语音记录后台转写失败，record_id=%s", record_id)
     finally:
+        heartbeat.cancel()
+        await asyncio.gather(heartbeat, return_exceptions=True)
         await asyncio.to_thread(Path(file_path).unlink, True)
 
     vector_id = None
@@ -432,6 +467,9 @@ async def transcribe_voice_record(
         record.content = text
         record.summary = summary
         record.transcription_status = status
+        # 原因码只在失败时保留，成功或重新排队时清空，避免前端读到旧原因。
+        record.transcription_error = error_reason
+        record.transcription_heartbeat_at = None
         if vector_id:
             record.vector_id = vector_id
         # 转写完成时间就是记录更新时间，前端据此判断内容是否已刷新。

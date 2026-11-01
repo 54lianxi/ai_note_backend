@@ -26,6 +26,8 @@ class RecordResponse(BaseModel):
     file_content_type: str | None = None
     file_size: int | None = None
     transcription_status: str = "done"
+    # 转写失联原因码；前端按码取本地化文案，没有对应文案时回落通用失败提示。
+    transcription_error: str | None = None
     manual_transcription_count: int = 0
     manual_transcription_limit: int = 3
     created_at: datetime

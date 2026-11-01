@@ -1,4 +1,5 @@
 """FastAPI 应用入口"""
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from fastapi.responses import FileResponse
 
 # 导入所有 ORM 模型，确保 create_all 能发现全部表
 import app.models
+from app.api.record import run_stalled_transcription_reaper
 from app.api.router import api_router
 from app.config import settings
 from app.infrastructure.database import close_db, init_db
@@ -26,9 +28,16 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
     await init_db()
-    yield
-    # 关闭时
-    await close_db()
+    # 后台转写跑在 API 进程内，进程重启就丢了；用定时巡检把失联任务收尾，
+    # 免得用户永远看到「正在转写」。
+    reaper = asyncio.create_task(run_stalled_transcription_reaper())
+    try:
+        yield
+    finally:
+        reaper.cancel()
+        await asyncio.gather(reaper, return_exceptions=True)
+        # 关闭时
+        await close_db()
 
 
 app = FastAPI(

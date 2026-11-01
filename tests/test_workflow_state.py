@@ -167,6 +167,8 @@ class _FakeRecord:
         self.content = ""
         self.summary = None
         self.transcription_status = "pending"
+        self.transcription_error = "stalled"
+        self.transcription_heartbeat_at = None
         self.vector_id = None
         self.updated_at = None
 
@@ -221,6 +223,13 @@ def _patch_voice_pipeline(monkeypatch, *, transcript, summary):
     monkeypatch.setattr(record_module, "EmbeddingService", FakeEmbedding)
     monkeypatch.setattr(record_module, "get_vector_client", FakeVectorClient)
 
+    async def no_heartbeat(_record_id):
+        return None
+
+    monkeypatch.setattr(
+        record_module, "_write_transcription_heartbeat", no_heartbeat
+    )
+
 
 @pytest.mark.asyncio
 async def test_background_transcription_writes_back(monkeypatch, tmp_path):
@@ -246,6 +255,9 @@ async def test_background_transcription_writes_back(monkeypatch, tmp_path):
     assert record.transcription_status == "done"
     assert record.vector_id == "vector-id"
     assert record.updated_at is not None
+    # 成功后必须清掉旧的原因码和心跳，前端才不会读到上一次失败的提示。
+    assert record.transcription_error is None
+    assert record.transcription_heartbeat_at is None
     assert session.committed is True
 
 
@@ -273,6 +285,8 @@ async def test_background_transcription_failure_keeps_record(monkeypatch, tmp_pa
 
     assert audio_path.exists() is False
     assert record.transcription_status == "failed"
+    # 调用方没给原因映射时也要有兜底原因码。
+    assert record.transcription_error == "failed"
     assert record.vector_id is None
     assert record.updated_at is not None
     assert session.committed is True

@@ -130,6 +130,21 @@ async def init_db():
                 "ON subscriptions (purchase_token)"
             )
         )
+        # 后台转写心跳：长录音转十几分钟是正常的，靠心跳判断执行任务的
+        # 进程是否还在，而不是靠「超过固定时长就算失败」。
+        await conn.execute(
+            text(
+                "ALTER TABLE records ADD COLUMN IF NOT EXISTS "
+                "transcription_heartbeat_at TIMESTAMPTZ"
+            )
+        )
+        # 转写失联原因码，前端据此区分提示文案。
+        await conn.execute(
+            text(
+                "ALTER TABLE records ADD COLUMN IF NOT EXISTS "
+                "transcription_error VARCHAR(40)"
+            )
+        )
         # 统一时间存储：历史列是 TIMESTAMP（无时区），按 UTC 解释后转成 TIMESTAMPTZ。
         # 只处理当前仍为 naive 的列，避免重复转换造成时区偏移。
         legacy_columns = (

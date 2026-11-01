@@ -133,6 +133,16 @@ class Settings(BaseSettings):
     # 每条语音记录允许用户主动重新转写的总次数。
     MANUAL_TRANSCRIPTION_LIMIT: int = Field(default=3, ge=1, le=20)
 
+    # 后台转写的心跳与失联判定。长录音转写要跑十几到几十分钟，
+    # 判断任务是否已经丢失只看心跳，不用固定超时时长去猜。
+    TRANSCRIPTION_HEARTBEAT_SECONDS: int = Field(default=20, ge=5, le=300)
+    # 任务从调度到第一次心跳之间的空窗，要够从对象存储拉下几百MB 录音。
+    TRANSCRIPTION_START_GRACE_SECONDS: int = Field(default=180, ge=30, le=3600)
+    # 连续这么多个心跳周期没刷新，才认为执行任务的进程已经不在了。
+    TRANSCRIPTION_HEARTBEAT_MISS_LIMIT: int = Field(default=6, ge=2, le=60)
+    # 心跳失联任务的巡检间隔。
+    TRANSCRIPTION_REAPER_INTERVAL_SECONDS: int = Field(default=60, ge=10, le=600)
+
     # 实时转写（录音过程中的字幕）。
     # provider=gemini 走 Live API 的 BidiGenerateContent；
     # provider=openai 走 OpenAI Realtime 协议。

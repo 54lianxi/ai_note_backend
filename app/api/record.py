@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -19,8 +20,8 @@ from fastapi import (
     HTTPException,
     UploadFile,
 )
-from openai import AuthenticationError, OpenAIError
-from sqlalchemy import func, select
+from openai import APITimeoutError, AuthenticationError, OpenAIError
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.media import resolve_object_name
@@ -28,7 +29,7 @@ from app.config import settings
 from app.core.i18n import LanguageDep, t
 from app.core.security import CurrentUserId
 from app.core.timeutil import ensure_utc, parse_utc
-from app.infrastructure.database import get_db
+from app.infrastructure.database import async_session_factory, get_db
 from app.infrastructure.minio_client import get_minio_client
 from app.infrastructure.vector_db import get_vector_client
 from app.models.record import Record
@@ -143,6 +144,7 @@ def _record_response(
     record: Record, message: str | None = None, language: str | None = None
 ) -> RecordResponse:
     message = message or t(language, "record_saved")
+    display_status, display_error = _transcription_display(record)
     return RecordResponse(
         record_id=record.id,
         message=message,
@@ -155,7 +157,8 @@ def _record_response(
         file_name=record.file_name,
         file_content_type=record.file_content_type,
         file_size=record.file_size,
-        transcription_status=record.transcription_status or "done",
+        transcription_status=display_status,
+        transcription_error=display_error,
         manual_transcription_count=record.manual_transcription_count,
         manual_transcription_limit=settings.MANUAL_TRANSCRIPTION_LIMIT,
         created_at=record.created_at,
@@ -163,19 +166,125 @@ def _record_response(
     )
 
 
-# 后台转写任务在进程重启等情况下可能丢失，超时后把卡住的任务标记为失败，
-# 免得用户永远看到「正在转写」。
-_STALE_TRANSCRIPTION = timedelta(minutes=10)
+def _stale_transcription_seconds() -> int:
+    """心跳失联多久算任务丢失。留够余量，别把 GC 或网络抖动误判成死亡。"""
+    interval = settings.TRANSCRIPTION_HEARTBEAT_SECONDS
+    return interval * settings.TRANSCRIPTION_HEARTBEAT_MISS_LIMIT + interval
 
 
-def _fail_stale_transcriptions(records: list[Record]) -> None:
-    cutoff = datetime.now(UTC) - _STALE_TRANSCRIPTION
-    for record in records:
-        if record.transcription_status != "pending":
-            continue
-        last_touch = ensure_utc(record.updated_at or record.created_at)
-        if last_touch is None or last_touch < cutoff:
+def _heartbeat_stalled(record: Record, now: datetime) -> bool:
+    """判断后台转写是否失联；只读，不改 ORM 对象。
+
+    心跳由转写任务定期刷新，所以长录音只要还在跑就不会被误判。
+    任务丢失时 pending 行不再有心跳，超过阈值即视为失败。
+    """
+    if (record.transcription_status or "done") != "pending":
+        return False
+    grace = timedelta(seconds=settings.TRANSCRIPTION_START_GRACE_SECONDS)
+    stale = timedelta(seconds=_stale_transcription_seconds())
+    scheduled_at = record.updated_at or record.created_at
+    if scheduled_at is None:
+        return False
+    if ensure_utc(scheduled_at) > now - grace:
+        # 刚调度的任务还没来得及发第一次心跳，不能算失联。
+        return False
+    heartbeat_at = record.transcription_heartbeat_at
+    if heartbeat_at is None:
+        return True
+    return ensure_utc(heartbeat_at) < now - stale
+
+
+def _transcription_display(record: Record) -> tuple[str, str | None]:
+    """返回展示用的转写状态和原因码。
+
+    读接口以前会把判定为超时的 pending 直接写成 failed 并提交，
+    前端每 4 秒的状态轮询自己就能把还在正常跑的长录音转写判死。
+    这里只改响应，真正落库交给 [reap_stalled_transcriptions]。
+    """
+    status = record.transcription_status or "done"
+    error = record.transcription_error
+    if status == "pending" and _heartbeat_stalled(record, datetime.now(UTC)):
+        return "failed", "stalled"
+    if status == "done":
+        return status, None
+    return status, error
+
+
+_TIMEOUT_EXCEPTION_NAMES = {"APITimeoutError", "TimeoutException", "ReadTimeout"}
+
+
+def _is_timeout(error: BaseException) -> bool:
+    """沿异常链识别超时；httpx 超时的 str() 是空串，只能按类型判断。"""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (httpx.TimeoutException, APITimeoutError)):
+            return True
+        if type(current).__name__ in _TIMEOUT_EXCEPTION_NAMES:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def asr_reason_code(error: Exception) -> str:
+    """把 ASR 异常归一成给客户端展示的原因码。"""
+    if _is_timeout(error) or "timed out" in str(error).lower():
+        return "timeout"
+    if isinstance(error, ASRServiceError):
+        status = error.status_code
+        if status == 429:
+            return "rate_limited"
+        if status is None or status >= 500:
+            # 连接失败、上游 5xx 或响应结构不对，都引导用户稍后重试。
+            return "unavailable"
+        return "failed"
+    return "failed"
+
+
+async def reap_stalled_transcriptions() -> int:
+    """把心跳失联的后台转写落库为失败。
+
+    后台转写跑在 API 进程内，重启会杀掉正在执行的任务，音频已存但没人再
+    推进；不能让用户永远看到「正在转写」，所以由巡检任务负责回收。
+    """
+    now = datetime.now(UTC)
+    grace = timedelta(seconds=settings.TRANSCRIPTION_START_GRACE_SECONDS)
+    stale = timedelta(seconds=_stale_transcription_seconds())
+    heartbeat = Record.transcription_heartbeat_at
+    scheduled_at = func.coalesce(Record.updated_at, Record.created_at)
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(Record).where(
+                Record.transcription_status == "pending",
+                or_(
+                    and_(heartbeat.is_not(None), heartbeat < now - stale),
+                    and_(heartbeat.is_(None), scheduled_at < now - grace),
+                ),
+            )
+        )
+        rows = list(result.scalars().all())
+        for record in rows:
             record.transcription_status = "failed"
+            record.transcription_error = "stalled"
+        if rows:
+            await session.commit()
+    if rows:
+        logger.warning("后台转写心跳失联，标记为失败：%d 条", len(rows))
+    return len(rows)
+
+
+async def run_stalled_transcription_reaper() -> None:
+    """周期性回收失联的后台转写任务。"""
+    interval = settings.TRANSCRIPTION_REAPER_INTERVAL_SECONDS
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await reap_stalled_transcriptions()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("巡检失联转写任务失败", exc_info=True)
 
 
 def _workflow_response(result, language: str | None = None) -> RecordResponse:
@@ -200,6 +309,7 @@ def _workflow_response(result, language: str | None = None) -> RecordResponse:
         file_content_type=result.content_type_header or None,
         file_size=len(result.file_data) if result.file_data else None,
         transcription_status=result.transcription_status or "done",
+        transcription_error=None,
         manual_transcription_count=0,
         manual_transcription_limit=settings.MANUAL_TRANSCRIPTION_LIMIT,
         created_at=created_at,
@@ -309,6 +419,7 @@ async def create_voice_record(
                 file_path=file_path,
                 filename=file.filename or "audio.wav",
                 language=language,
+                reason_mapper=asr_reason_code,
             )
             owns_file = False
         return _workflow_response(result, language)
@@ -438,7 +549,6 @@ async def list_records(
         .limit(min(limit, 100))
     )
     records = list(result.scalars().all())
-    _fail_stale_transcriptions(records)
     return RecordListResponse(
         records=[_record_response(record) for record in records],
         total=count,
@@ -462,8 +572,7 @@ async def get_record(
     record = result.scalar_one_or_none()
     if record is None:
         raise HTTPException(status_code=404, detail=t(language, "record_not_found"))
-    _fail_stale_transcriptions([record])
-    return _record_response(record)
+    return _record_response(record, language=language)
 
 
 @router.patch("/records/{record_id}", response_model=RecordResponse)
@@ -617,6 +726,8 @@ async def retry_transcription(
 
     try:
         record.transcription_status = "pending"
+        record.transcription_error = None
+        record.transcription_heartbeat_at = None
         record.manual_transcription_count += 1
         record.updated_at = datetime.now(UTC)
         await db.commit()
@@ -631,6 +742,7 @@ async def retry_transcription(
         file_path=file_path,
         filename=record.file_name or "audio.wav",
         language=language,
+        reason_mapper=asr_reason_code,
     )
     return _record_response(record, language=language)
 
