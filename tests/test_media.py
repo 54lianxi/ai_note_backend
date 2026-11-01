@@ -80,8 +80,8 @@ def test_resolve_object_name_strips_bucket_prefix(path, expected):
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
-        # 新形态：bucket + 带前缀 key，只有一种可能
-        ("records/records/voice_1.wav", ["records/voice_1.wav"]),
+        # 新形态：bucket + 带前缀 key（兜底候选保留路径本身）
+        ("records/records/voice_1.wav", ["records/voice_1.wav", "records/records/voice_1.wav"]),
         # 歧义路径：可能是「只带 key（key 带前缀）」，也可能是「bucket + 裸 key」
         ("records/voice_1.wav", ["records/voice_1.wav", "voice_1.wav"]),
         # 不带 bucket 前缀：就是 key 本身

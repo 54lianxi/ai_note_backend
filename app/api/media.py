@@ -28,7 +28,8 @@ def resolve_object_candidates(path: str, bucket: str | None = None) -> list[str]
     历史数据有两种 key 形态：新数据 key 带 records/ 子目录（URL 路径
     /records/records/voice_x.wav），老数据是裸 key（URL 路径
     /records/voice_x.wav）。路径只有一层时两种形态无法静态区分，所以都列
-    出来，由调用方按顺序 stat/get，取第一个命中的。
+    出来，由调用方按顺序 stat/get，取第一个命中的；最后兜底再把路径本身当
+    完整 key 试一次（覆盖双前缀 key 的异常形态）。
     """
     bucket = bucket or settings.MINIO_BUCKET
     prefix = f"{bucket}/"
@@ -44,6 +45,8 @@ def resolve_object_candidates(path: str, bucket: str | None = None) -> list[str]
         stripped = path[len(prefix):]
         if stripped and stripped not in candidates:
             candidates.append(stripped)
+    if path and path not in candidates:
+        candidates.append(path)
     return candidates
 
 

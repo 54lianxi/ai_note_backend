@@ -16,11 +16,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import asyncpg  # noqa: E402
+import asyncpg
 
-from app.config import settings  # noqa: E402
-from app.infrastructure.vector_db import get_vector_client  # noqa: E402
-from app.services.embedding_service import EmbeddingService  # noqa: E402
+from app.config import settings
+from app.infrastructure.vector_db import get_vector_client
+from app.services.embedding_service import EmbeddingService
 
 # asyncpg 不认 SQLAlchemy 的 driver 前缀和 asyncpg 方言参数。
 _SELECT = """

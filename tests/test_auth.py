@@ -4,15 +4,14 @@ from fastapi.security import HTTPAuthorizationCredentials
 from starlette.requests import Request
 
 from app.api.auth import (
-    REVIEW_USERNAME,
     _REVIEW_ATTEMPTS,
+    REVIEW_USERNAME,
     _apple_user_id,
     _apple_username,
     _google_user_id,
     _google_username,
     sign_in_as_review_account,
 )
-from app.infrastructure.minio_client import object_name_from_url
 from app.config import settings
 from app.core.security import (
     DEV_ACCESS_TOKEN,
@@ -21,6 +20,7 @@ from app.core.security import (
     decode_access_token,
     get_current_user_id,
 )
+from app.infrastructure.minio_client import object_name_from_url
 from app.schemas.auth import ReviewLoginRequest
 
 

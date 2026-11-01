@@ -49,10 +49,7 @@ async def realtime_transcription(websocket: WebSocket):
                     raise WebSocketDisconnect
                 if message.get("bytes") is not None:
                     await audio_queue.put(message["bytes"])
-                elif message.get("text") == "stop":
-                    await audio_queue.put(None)
-                    return
-                elif message.get("text") == "cancel":
+                elif message.get("text") == "stop" or message.get("text") == "cancel":
                     await audio_queue.put(None)
                     return
         finally:

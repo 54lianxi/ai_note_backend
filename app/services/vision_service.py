@@ -1,9 +1,11 @@
 """视觉模型服务 - 图片关键信息提取"""
 import base64
+
 from openai import AsyncOpenAI
+
 from app.config import settings
-from app.core.i18n import vision_system_prompt
 from app.core.http import build_async_client
+from app.core.i18n import vision_system_prompt
 
 
 class VisionService:

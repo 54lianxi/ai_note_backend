@@ -10,12 +10,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.record import _record_response
 from app.core.i18n import LanguageDep, t
 from app.core.security import CurrentUserId
 from app.core.timeutil import parse_utc
 from app.infrastructure.database import get_db
-from app.models.conversation import Conversation
-from app.models.conversation import Message
+from app.models.conversation import Conversation, Message
+from app.models.record import Record
 from app.schemas.chat import (
     ConversationCreate,
     ConversationDetailResponse,
@@ -28,10 +29,8 @@ from app.schemas.chat import (
 from app.schemas.record import RecordResponse
 from app.schemas.search import SearchResultItem
 from app.services.llm_service import LLMService
-from app.models.record import Record
 from app.workflows.record_workflow import execute_record_workflow
 from app.workflows.search_workflow import execute_search_workflow
-from app.api.record import _record_response
 
 router = APIRouter(tags=["对话管理"])
 logger = logging.getLogger(__name__)

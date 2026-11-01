@@ -1,16 +1,17 @@
 """诊断「老录音 MinIO 对象丢失」问题。只读核对，不修改任何数据。
 
-把数据库里每条图片/音频 URL 与 MinIO 里的实际对象表做交叉核对，分成三类：
+把数据库里每条图片/音频 URL 与 MinIO 里的实际对象表做交叉核对，分成三类，
+最后输出 MinIO 全量对象清单（带时间、孤儿标记），便于定位异常 key 或误删：
 
   OK       现行代理解析逻辑就能命中对象（正常）
-  FIXABLE  现行逻辑会 404，但历史 key 形态（裸 key）能命中——media 代理
-           解析缺陷所致，对象其实还在 MinIO 里（本次修复解决的就是这类）
+  FIXABLE  现行逻辑会 404，但历史 key 形态（裸 key / 双前缀 key）能命中——
+           对象其实还在 MinIO 里，部署 media 代理的候选解析修复后恢复
   MISSING  所有候选 key 都不存在——对象真的丢了，需要查 MinIO 数据卷/备份
-           （例如容器重建时卷没保住）
+           和当时的运维操作记录（mc rm / 手工清理 / 孤儿清理脚本误删）
 
 用法（在能同时访问数据库和 MinIO 的机器上，比如服务器）：
 
-    venv/bin/python scripts/diagnose_media_objects.py
+    APP_ENV=production venv/bin/python scripts/diagnose_media_objects.py
 
 仓库根目录或 backend/ 目录下运行都可以，脚本会自动定位 app 包；
 数据库/对象存储配置按应用自身逻辑加载（APP_ENV 决定读 .env 还是 .env.prod）。
@@ -86,9 +87,9 @@ async def fetch_media_urls(conn) -> list[tuple[str, str, datetime]]:
 async def main() -> None:
     minio = get_minio_client()
     print(f"枚举 bucket {minio.bucket!r} 的对象 …")
-    existing: set[str] = set()
+    existing: dict[str, tuple[datetime, int]] = {}
     for obj in minio.client.list_objects(minio.bucket, recursive=True):
-        existing.add(obj.object_name)
+        existing[obj.object_name] = (obj.last_modified, obj.size)
     print(f"MinIO 对象总数: {len(existing)}")
 
     conn = await asyncpg.connect(_asyncpg_dsn())
@@ -101,10 +102,12 @@ async def main() -> None:
     results: Counter[str] = Counter()
     fixable: list[tuple[datetime, str, str, str]] = []
     missing: list[tuple[datetime, str, str]] = []
+    referenced: set[str] = set()
 
     for content_type, url, created_at in urls:
         path = _path_from_url(url)
         candidates = resolve_object_candidates(path)
+        referenced.update(candidates)
         if candidates and candidates[0] in existing:
             results["OK"] += 1
         elif any(c in existing for c in candidates):
@@ -128,8 +131,17 @@ async def main() -> None:
         print(f"\n=== MISSING（对象确实丢失，前 {SAMPLE_LIMIT} 条）===")
         for created_at, content_type, url in missing[:SAMPLE_LIMIT]:
             print(f"  {created_at:%Y-%m-%d} [{content_type}] {url}")
-        print("\n建议排查方向：MinIO 数据卷是否保住（容器/镜像重建、docker system prune）、"
-              "是否有过 bucket 迁移或清空操作、服务器磁盘与备份。")
+        print(
+            "\n建议排查方向：MinIO 数据卷是否保住（容器/镜像重建、docker system prune）、"
+            "是否有过 bucket 迁移或清空操作、服务器磁盘与备份；同时翻当时时段的运维记录"
+            "（mc rm / 手工清理 / 孤儿清理脚本），特别注意带空格或特殊字符的 key 被误删。"
+        )
+
+    print("\n=== MinIO 对象清单 ===")
+    for key in sorted(existing):
+        last_modified, size = existing[key]
+        mark = "" if key in referenced else "  <- 孤儿（数据库没有引用它的 URL）"
+        print(f"  {last_modified:%Y-%m-%d %H:%M}  {size:>12}  {key}{mark}")
 
     if not fixable and not missing:
         print("\n所有 URL 都能按现行逻辑命中，对象不存在解析问题。")
