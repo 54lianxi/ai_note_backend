@@ -27,6 +27,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import asyncpg
+from pydantic import ValidationError
 
 try:
     from app.api.media import resolve_object_candidates
@@ -42,6 +43,13 @@ except ModuleNotFoundError:
     from app.api.media import resolve_object_candidates
     from app.config import settings
     from app.infrastructure.minio_client import get_minio_client
+except ValidationError:
+    # 常见于手动运行时 shell 里没有服务的环境变量（如 APP_ENV=production），
+    # 读到的是占位配置的 .env。诊断只需要数据库和 MinIO 配置，补齐环境重跑即可。
+    print("配置校验失败：手动运行的 shell 缺少服务的环境变量。")
+    print("如果服务用 APP_ENV=production 启动（加载 .env.prod），请这样重跑：")
+    print("    APP_ENV=production venv/bin/python scripts/diagnose_media_objects.py")
+    sys.exit(1)
 
 SAMPLE_LIMIT = 20
 
