@@ -17,7 +17,7 @@ from app.config import settings
 from app.core.i18n import LanguageDep, t
 from app.core.security import CurrentUserId, create_access_token
 from app.infrastructure.database import get_db
-from app.infrastructure.minio_client import get_minio_client
+from app.infrastructure.minio_client import get_minio_client, object_name_from_url
 from app.infrastructure.vector_db import get_vector_client
 from app.models.conversation import Conversation, Message
 from app.models.record import Record
@@ -315,15 +315,6 @@ async def sign_in_as_review_account(
     )
 
 
-def _object_name_from_url(bucket: str, url: str) -> str | None:
-    """从对象存储 URL 反推 MinIO 的 object key，取不到时返回 None。"""
-    marker = f"/{bucket}/"
-    index = url.find(marker)
-    if index == -1:
-        return None
-    return url[index + len(marker):]
-
-
 @router.delete("/auth/account")
 async def delete_account(
     db: DbSession,
@@ -354,7 +345,7 @@ async def delete_account(
             try:
                 if minio is None:
                     minio = get_minio_client()
-                object_name = _object_name_from_url(minio.bucket, url)
+                object_name = object_name_from_url(minio.bucket, url)
                 if object_name:
                     minio.delete_file(object_name)
             except Exception:

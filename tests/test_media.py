@@ -78,6 +78,72 @@ def test_resolve_object_name_strips_bucket_prefix(path, expected):
 
 
 @pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        # 新形态：bucket + 带前缀 key，只有一种可能
+        ("records/records/voice_1.wav", ["records/voice_1.wav"]),
+        # 歧义路径：可能是「只带 key（key 带前缀）」，也可能是「bucket + 裸 key」
+        ("records/voice_1.wav", ["records/voice_1.wav", "voice_1.wav"]),
+        # 不带 bucket 前缀：就是 key 本身
+        ("voice_1.wav", ["voice_1.wav"]),
+        ("", []),
+    ],
+)
+def test_resolve_object_candidates(path, expected):
+    assert media.resolve_object_candidates(path) == expected
+
+
+class _FakeMinIOWithKeys:
+    """按真实 key 表判定的 fake：stat/get 只命中表里的 key。"""
+
+    def __init__(self, existing: set[str]):
+        self.bucket = "records"
+        self.client = self
+        self._existing = existing
+        self.stat_calls: list[str] = []
+        self.get_calls: list[str] = []
+
+    def stat_object(self, bucket: str, object_name: str):
+        self.stat_calls.append(object_name)
+        if object_name not in self._existing:
+            raise _s3_error()
+        return _FakeStat(10, "audio/wav")
+
+    def get_object(self, bucket: str, object_name: str, offset=None, length=None):
+        self.get_calls.append(object_name)
+        if object_name not in self._existing:
+            raise _s3_error()
+        return _FakeResponse(b"abcdefghij")
+
+
+@pytest.mark.asyncio
+async def test_media_falls_back_to_bare_key_for_legacy_objects(monkeypatch):
+    """老录音的 key 不带 records/ 前缀（裸 key），代理要回退命中。"""
+    fake = _FakeMinIOWithKeys({"voice_1.wav"})
+    monkeypatch.setattr(media, "get_minio_client", lambda: fake)
+
+    response = await media.get_media("records/voice_1.wav", None)
+
+    assert response.status_code == 200
+    assert await _body(response) == b"abcdefghij"
+    assert fake.stat_calls == ["records/voice_1.wav", "voice_1.wav"]
+    assert fake.get_calls == ["voice_1.wav"]
+
+
+@pytest.mark.asyncio
+async def test_media_prefers_prefixed_key_when_both_exist(monkeypatch):
+    """两种形态的 key 都在时，先命中主候选（现行形态），不改变旧行为。"""
+    fake = _FakeMinIOWithKeys({"records/voice_1.wav", "voice_1.wav"})
+    monkeypatch.setattr(media, "get_minio_client", lambda: fake)
+
+    response = await media.get_media("records/voice_1.wav", None)
+
+    assert response.status_code == 200
+    assert fake.stat_calls == ["records/voice_1.wav"]
+    assert fake.get_calls == ["records/voice_1.wav"]
+
+
+@pytest.mark.parametrize(
     ("raw", "size", "expected"),
     [
         (None, 10, None),

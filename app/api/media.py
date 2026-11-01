@@ -22,17 +22,35 @@ logger = logging.getLogger(__name__)
 _CHUNK_SIZE = 64 * 1024
 
 
-def resolve_object_name(path: str, bucket: str | None = None) -> str:
-    """把 URL 路径还原成对象存储里的 key。
+def resolve_object_candidates(path: str, bucket: str | None = None) -> list[str]:
+    """按尝试顺序返回 URL 路径对应的候选对象 key。
 
-    历史 URL 形如 /records/records/voice_x.wav（bucket + key），也可能只带 key，
-    这里只在确实带了 bucket 前缀时去掉它。
+    历史数据有两种 key 形态：新数据 key 带 records/ 子目录（URL 路径
+    /records/records/voice_x.wav），老数据是裸 key（URL 路径
+    /records/voice_x.wav）。路径只有一层时两种形态无法静态区分，所以都列
+    出来，由调用方按顺序 stat/get，取第一个命中的。
     """
     bucket = bucket or settings.MINIO_BUCKET
     prefix = f"{bucket}/"
-    if path.startswith(prefix) and path.count("/") >= 2:
-        return path[len(prefix):]
-    return path
+    candidates: list[str] = []
+    primary = (
+        path[len(prefix):]
+        if path.startswith(prefix) and path.count("/") >= 2
+        else path
+    )
+    if primary:
+        candidates.append(primary)
+    if path.startswith(prefix):
+        stripped = path[len(prefix):]
+        if stripped and stripped not in candidates:
+            candidates.append(stripped)
+    return candidates
+
+
+def resolve_object_name(path: str, bucket: str | None = None) -> str:
+    """把 URL 路径还原成最可能的对象存储 key（完整候选见 resolve_object_candidates）。"""
+    candidates = resolve_object_candidates(path)
+    return candidates[0] if candidates else ""
 
 
 def _parse_range(raw: str | None, size: int) -> tuple[int, int] | None:
@@ -74,16 +92,20 @@ async def get_media(
     range_header: Annotated[str | None, Header(alias="Range")] = None,
 ):
     """读取图片/音频对象。公开访问，和原来对象存储的只读策略一致。"""
-    object_name = resolve_object_name(path)
-    if not object_name:
-        raise HTTPException(status_code=404, detail="文件不存在")
-
+    candidates = resolve_object_candidates(path)
     minio = get_minio_client()
-    try:
-        stat = minio.client.stat_object(minio.bucket, object_name)
-    except S3Error as error:
-        logger.info("媒体对象不存在: %s (%s)", object_name, error.code)
-        raise HTTPException(status_code=404, detail="文件不存在") from error
+    stat = None
+    object_name = None
+    for candidate in candidates:
+        try:
+            stat = minio.client.stat_object(minio.bucket, candidate)
+            object_name = candidate
+            break
+        except S3Error:
+            continue
+    if stat is None:
+        logger.info("媒体对象不存在: %s (候选 %s)", path, candidates)
+        raise HTTPException(status_code=404, detail="文件不存在")
 
     size = stat.size or 0
     headers = {

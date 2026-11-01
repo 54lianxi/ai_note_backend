@@ -20,17 +20,18 @@ from fastapi import (
     HTTPException,
     UploadFile,
 )
+from minio.error import S3Error
 from openai import APITimeoutError, AuthenticationError, OpenAIError
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.media import resolve_object_name
+from app.api.media import resolve_object_candidates
 from app.config import settings
 from app.core.i18n import LanguageDep, t
 from app.core.security import CurrentUserId
 from app.core.timeutil import ensure_utc, parse_utc
 from app.infrastructure.database import async_session_factory, get_db
-from app.infrastructure.minio_client import get_minio_client
+from app.infrastructure.minio_client import get_minio_client, object_name_from_url
 from app.infrastructure.vector_db import get_vector_client
 from app.models.record import Record
 from app.schemas.record import (
@@ -686,8 +687,8 @@ async def retry_transcription(
     path = urlparse(record.file_url).path.lstrip("/")
     if path.startswith(f"{settings.API_PREFIX.lstrip('/')}/media/"):
         path = path[len(settings.API_PREFIX.lstrip("/")) + len("/media/") :]
-    object_name = resolve_object_name(path)
-    if not object_name:
+    candidates = resolve_object_candidates(path)
+    if not candidates:
         raise HTTPException(
             status_code=404,
             detail=t(language, "audio_not_found"),
@@ -695,25 +696,37 @@ async def retry_transcription(
     minio = get_minio_client()
 
     def download_audio() -> str:
-        """从对象存储流式落到临时文件，长录音不经过内存。"""
+        """从对象存储流式落到临时文件，长录音不经过内存。
+
+        历史数据 key 形态不统一，按候选顺序逐个尝试，第一个命中即停。
+        """
         suffix = Path(record.file_name or "").suffix or ".audio"
-        fd, path = tempfile.mkstemp(prefix="retry-", suffix=suffix)
-        target = os.fdopen(fd, "wb")
-        response = None
-        try:
-            response = minio.client.get_object(minio.bucket, object_name)
-            for chunk in response.stream(1024 * 1024):
-                target.write(chunk)
-            target.close()
-        except BaseException:
-            target.close()
-            Path(path).unlink(missing_ok=True)
-            raise
-        finally:
-            if response is not None:
-                response.close()
-                response.release_conn()
-        return path
+        last_error: S3Error | None = None
+        for candidate in candidates:
+            fd, temp_path = tempfile.mkstemp(prefix="retry-", suffix=suffix)
+            target = os.fdopen(fd, "wb")
+            response = None
+            ok = False
+            try:
+                response = minio.client.get_object(minio.bucket, candidate)
+                for chunk in response.stream(1024 * 1024):
+                    target.write(chunk)
+                target.close()
+                ok = True
+                return temp_path
+            except S3Error as error:
+                # key 形态没对上，试下一个候选
+                last_error = error
+            finally:
+                if response is not None:
+                    response.close()
+                    response.release_conn()
+                if not ok:
+                    if not target.closed:
+                        target.close()
+                    Path(temp_path).unlink(missing_ok=True)
+        assert last_error is not None
+        raise last_error
 
     try:
         file_path = await asyncio.to_thread(download_audio)
@@ -770,6 +783,18 @@ async def delete_record(
             get_vector_client().delete_record(str(record.id), user_id)
         except Exception:
             logger.warning("删除记录向量失败: %s", record.id, exc_info=True)
+
+    # 先清对象存储：删库之后就再也定位不到这些文件了。失败只记日志，不阻塞删除。
+    minio = get_minio_client()
+    for url in (record.image_url, record.file_url):
+        if not url:
+            continue
+        try:
+            object_name = object_name_from_url(minio.bucket, url)
+            if object_name:
+                minio.delete_file(object_name)
+        except Exception:
+            logger.warning("删除记录文件失败: %s", url, exc_info=True)
 
     await db.delete(record)
     return {"message": "已删除"}

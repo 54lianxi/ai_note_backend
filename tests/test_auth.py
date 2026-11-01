@@ -10,9 +10,9 @@ from app.api.auth import (
     _apple_username,
     _google_user_id,
     _google_username,
-    _object_name_from_url,
     sign_in_as_review_account,
 )
+from app.infrastructure.minio_client import object_name_from_url
 from app.config import settings
 from app.core.security import (
     DEV_ACCESS_TOKEN,
@@ -124,11 +124,11 @@ def test_review_username_fits_existing_column():
 def test_object_name_from_url_extracts_minio_key():
     url = "http://localhost:9000/notes/records/abc.png"
 
-    assert _object_name_from_url("notes", url) == "records/abc.png"
+    assert object_name_from_url("notes", url) == "records/abc.png"
 
 
 def test_object_name_from_url_returns_none_for_foreign_url():
-    assert _object_name_from_url("notes", "https://example.com/a.png") is None
+    assert object_name_from_url("notes", "https://example.com/a.png") is None
 
 
 @pytest.mark.asyncio

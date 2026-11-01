@@ -104,6 +104,15 @@ class MinIOClient:
     def delete_file(self, object_name: str) -> None:
         """删除文件"""
         self.client.remove_object(self.bucket, object_name)
+
+
+def object_name_from_url(bucket: str, url: str) -> str | None:
+    """从对象存储 URL 反推 MinIO 的 object key，取不到时返回 None。"""
+    marker = f"/{bucket}/"
+    index = url.find(marker)
+    if index == -1:
+        return None
+    return url[index + len(marker):]
     
     @staticmethod
     def _get_extension(content_type: str) -> str:
