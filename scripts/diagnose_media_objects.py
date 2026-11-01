@@ -10,24 +10,38 @@
 
 用法（在能同时访问数据库和 MinIO 的机器上，比如服务器）：
 
-    cd backend
-    .venv/bin/python scripts/diagnose_media_objects.py
+    venv/bin/python scripts/diagnose_media_objects.py
 
+仓库根目录或 backend/ 目录下运行都可以，脚本会自动定位 app 包；
+数据库/对象存储配置按应用自身逻辑加载（APP_ENV 决定读 .env 还是 .env.prod）。
 注意：导入 app 配置会按应用自身逻辑确保 bucket 存在（与启动行为一致），
 除此之外全程只读。
 """
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections import Counter
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlparse
 
 import asyncpg
 
-from app.api.media import resolve_object_candidates
-from app.config import settings
-from app.infrastructure.minio_client import get_minio_client
+try:
+    from app.api.media import resolve_object_candidates
+    from app.config import settings
+    from app.infrastructure.minio_client import get_minio_client
+except ModuleNotFoundError:
+    # 从仓库根目录等位置运行：app 包不在 sys.path，自动补上再导入。
+    _HERE = Path(__file__).resolve().parent
+    for _root in (_HERE.parent / "backend", _HERE.parent):
+        if (_root / "app").is_dir():
+            sys.path.insert(0, str(_root))
+            break
+    from app.api.media import resolve_object_candidates
+    from app.config import settings
+    from app.infrastructure.minio_client import get_minio_client
 
 SAMPLE_LIMIT = 20
 
