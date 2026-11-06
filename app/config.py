@@ -189,10 +189,10 @@ class Settings(BaseSettings):
     SUBSCRIPTION_FREE_VOICE_LIMIT: int = Field(default=3, gt=0)
     SUBSCRIPTION_FREE_IMAGE_LIMIT: int = Field(default=3, gt=0)
     SUBSCRIPTION_FREE_FILE_LIMIT: int = Field(default=1, gt=0)
-    # 每月录音时长额度（分钟），自然月（UTC）1 日重置。
-    # 免费用户的条数限制仍然生效；订阅用户条数不限，但受时长额度约束。
-    SUBSCRIPTION_FREE_AUDIO_MINUTES: int = Field(default=10, gt=0)
-    SUBSCRIPTION_PAID_AUDIO_MINUTES: int = Field(default=120, gt=0)
+    # 单条录音的时长上限（分钟），不是每月总额：免费版每条笔记最长 10 分钟，
+    # 订阅版直接用下面的 MAX_VOICE_DURATION_SECONDS（4 小时）。
+    # 免费版的 3 条笔记上限（SUBSCRIPTION_FREE_VOICE_LIMIT）继续独立生效。
+    SUBSCRIPTION_FREE_VOICE_MAX_MINUTES: int = Field(default=10, gt=0)
     # 仅本地开发免校验时使用，按多少天授予订阅。
     SUBSCRIPTION_FALLBACK_DAYS: int = Field(default=31)
     # 是否启用商店服务端校验。生产环境必须保持 true；关闭后接口会拒绝

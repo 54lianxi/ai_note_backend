@@ -15,13 +15,13 @@ from app.services.store_verification import (
     VerifiedSubscription,
 )
 from app.services.subscription_service import (
-    FREE_AUDIO_SECONDS_LIMIT,
     FREE_FILE_NOTE_LIMIT,
     FREE_IMAGE_NOTE_LIMIT,
     FREE_VOICE_NOTE_LIMIT,
-    PAID_AUDIO_SECONDS_LIMIT,
+    FREE_VOICE_NOTE_MAX_SECONDS,
     SubscriptionState,
     _is_active,
+    plan_voice_note_max_seconds,
     refresh_subscription_if_stale,
 )
 
@@ -39,8 +39,7 @@ def _state(**overrides) -> SubscriptionState:
         "image_note_limit": FREE_IMAGE_NOTE_LIMIT,
         "file_note_count": 0,
         "file_note_limit": FREE_FILE_NOTE_LIMIT,
-        "audio_seconds_used": 0,
-        "audio_seconds_limit": FREE_AUDIO_SECONDS_LIMIT,
+        "voice_note_max_seconds": FREE_VOICE_NOTE_MAX_SECONDS,
     }
     base.update(overrides)
     return SubscriptionState(**base)
@@ -50,32 +49,33 @@ def test_free_limit_matches_config():
     assert FREE_VOICE_NOTE_LIMIT == settings.SUBSCRIPTION_FREE_VOICE_LIMIT == 3
     assert FREE_IMAGE_NOTE_LIMIT == settings.SUBSCRIPTION_FREE_IMAGE_LIMIT == 3
     assert FREE_FILE_NOTE_LIMIT == settings.SUBSCRIPTION_FREE_FILE_LIMIT == 1
-    assert FREE_AUDIO_SECONDS_LIMIT == settings.SUBSCRIPTION_FREE_AUDIO_MINUTES * 60
+    assert (
+        FREE_VOICE_NOTE_MAX_SECONDS
+        == settings.SUBSCRIPTION_FREE_VOICE_MAX_MINUTES * 60
+        == 10 * 60
+    )
 
 
-def test_paid_audio_quota_is_two_hours():
-    assert PAID_AUDIO_SECONDS_LIMIT == 2 * 60 * 60
-    assert PAID_AUDIO_SECONDS_LIMIT == settings.SUBSCRIPTION_PAID_AUDIO_MINUTES * 60
+def test_voice_note_cap_is_per_note_and_depends_on_plan():
+    """额度是单条上限，不是月度总额：免费版 10 分钟，订阅版跟着单次录音上限走。"""
+    assert plan_voice_note_max_seconds(False) == 10 * 60
+    assert (
+        plan_voice_note_max_seconds(True)
+        == settings.MAX_VOICE_DURATION_SECONDS
+        == 4 * 60 * 60
+    )
 
 
-def test_audio_quota_blocks_recording_when_used_up():
-    remaining = _state(audio_seconds_used=FREE_AUDIO_SECONDS_LIMIT - 30)
-    assert remaining.audio_seconds_remaining == 30
-    assert remaining.can_record_audio
-
-    exhausted = _state(audio_seconds_used=FREE_AUDIO_SECONDS_LIMIT)
-    assert exhausted.audio_seconds_remaining == 0
-    assert not exhausted.can_record_audio
-
-
-def test_subscribed_user_still_has_audio_quota():
+def test_subscribed_user_never_runs_out_of_recording_time():
+    """录满 3 条之外，订阅用户不再有任何按时长的拦截。"""
     state = _state(
         is_subscribed=True,
         voice_note_limit=None,
-        audio_seconds_limit=PAID_AUDIO_SECONDS_LIMIT,
-        audio_seconds_used=PAID_AUDIO_SECONDS_LIMIT,
+        voice_note_count=FREE_VOICE_NOTE_LIMIT * 10,
+        voice_note_max_seconds=plan_voice_note_max_seconds(True),
     )
-    assert not state.can_record_audio
+    assert state.can_create_voice_note
+    assert state.voice_note_max_seconds == 4 * 60 * 60
 
 
 def test_free_user_can_create_until_reaching_limit():
@@ -120,10 +120,10 @@ def test_limit_message_includes_number():
     )
 
 
-def test_audio_quota_message_includes_usage():
+def test_voice_note_too_long_message_includes_limit():
     for language in ("zh", "en"):
-        message = t(language, "subscription_audio_quota", used=7, limit=10)
-        assert "7" in message and "10" in message
+        message = t(language, "voice_note_too_long", limit=10)
+        assert "10" in message
 
 
 def test_subscription_messages_exist_in_both_languages():

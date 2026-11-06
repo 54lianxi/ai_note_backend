@@ -62,10 +62,7 @@ def _status_response(state) -> SubscriptionStatusResponse:
         file_note_count=state.file_note_count,
         file_note_limit=state.file_note_limit,
         can_create_file_note=state.can_create_file_note,
-        audio_seconds_used=state.audio_seconds_used,
-        audio_seconds_limit=state.audio_seconds_limit,
-        audio_seconds_remaining=state.audio_seconds_remaining,
-        can_record_audio=state.can_record_audio,
+        voice_note_max_seconds=state.voice_note_max_seconds,
     )
 
 

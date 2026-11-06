@@ -56,7 +56,7 @@ class Record(Base):
     file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_content_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
     file_size: Mapped[int | None] = mapped_column(nullable=True)
-    # 语音/音频时长（秒），用于统计每月录音额度；非音频记录为 0。
+    # 语音/音频时长（秒），用于单条录音上限校验和笔记展示；非音频记录为 0。
     audio_duration_seconds: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )

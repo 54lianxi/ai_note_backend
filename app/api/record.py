@@ -363,8 +363,8 @@ async def create_voice_record(
     这样实时转写断开或长录音识别不完整时，最终笔记内容仍然完整。
     保存接口不再把 ASR 耗时算进「保存笔记」。
 
-    免费用户最多保存 3 段音频笔记；所有用户还受每月录音时长额度限制
-    （免费 10 分钟、订阅 2 小时），超出时返回 402，客户端据此引导订阅。
+    免费用户最多保存 3 段音频笔记、单条最长 10 分钟；订阅用户不限条数、单条
+    最长 4 小时。超条数或单条超长都返回 402，客户端据此引导订阅。
     """
     if not file.content_type or not file.content_type.startswith("audio"):
         raise HTTPException(status_code=400, detail=t(language, "audio_required"))
@@ -375,20 +375,15 @@ async def create_voice_record(
             status_code=402,
             detail=t(language, "subscription_rate_limit", limit=FREE_VOICE_NOTE_LIMIT),
         )
-    # 客户端上报时长，只用于额度统计；上限按单次录音上限截断，避免异常值。
-    duration_seconds = min(duration_seconds, settings.MAX_VOICE_DURATION_SECONDS)
-    remaining_seconds = state.audio_seconds_remaining
-    if remaining_seconds <= 0 or duration_seconds > remaining_seconds:
-        # 订阅到期后已用可能超过免费上限，提示里封顶，避免出现「已用 120/10 分钟」。
-        used_minutes = min((state.audio_seconds_used + 59) // 60,
-                           (state.audio_seconds_limit + 59) // 60)
+    # 时长是客户端上报的，只用于额度判断和详情页展示。这里不截断：截断等于
+    # 把超限的笔记放过来，用户随后会在录音界面上限之外看到一条可疑记录。
+    if duration_seconds > state.voice_note_max_seconds:
         raise HTTPException(
             status_code=402,
             detail=t(
                 language,
-                "subscription_audio_quota",
-                used=used_minutes,
-                limit=(state.audio_seconds_limit + 59) // 60,
+                "voice_note_too_long",
+                limit=state.voice_note_max_seconds // 60,
             ),
         )
 

@@ -39,7 +39,7 @@ class RecordState:
     file_data: bytes | None = None  # 原始文件数据（图片、文档）
     file_path: str = ""  # 语音的临时文件，流式上传，避免整段进内存
     file_size: int = 0  # 语音文件字节数
-    audio_duration_seconds: int = 0  # 语音时长，用于每月录音额度
+    audio_duration_seconds: int = 0  # 语音时长，用于单条上限校验和笔记展示
     filename: str = ""
     content_type_header: str = ""  # HTTP Content-Type
 

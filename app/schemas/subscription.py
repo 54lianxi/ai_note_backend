@@ -23,11 +23,9 @@ class SubscriptionStatusResponse(BaseModel):
     file_note_count: int = 0
     file_note_limit: int | None = None
     can_create_file_note: bool = True
-    # 本月录音时长额度（秒）。免费 600 秒，订阅 7200 秒。
-    audio_seconds_used: int = 0
-    audio_seconds_limit: int = 0
-    audio_seconds_remaining: int = 0
-    can_record_audio: bool = True
+    # 单条录音最长时长（秒），按档位给：免费 600（10 分钟），订阅 14400（4 小时）。
+    # 时长不再按月累计，所以没有「本月已用/剩余」这类字段。
+    voice_note_max_seconds: int
 
 
 class VerifySubscriptionRequest(BaseModel):

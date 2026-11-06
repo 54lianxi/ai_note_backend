@@ -66,7 +66,7 @@ async def init_db():
         await conn.execute(
             text("ALTER TABLE records ADD COLUMN IF NOT EXISTS file_size INTEGER")
         )
-        # 音频时长用于统计每月录音额度，历史数据按 0 计。
+        # 音频时长用于单条录音上限校验和展示，历史数据按 0 计。
         await conn.execute(
             text(
                 "ALTER TABLE records ADD COLUMN IF NOT EXISTS "
