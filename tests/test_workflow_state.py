@@ -219,6 +219,9 @@ def _patch_voice_pipeline(monkeypatch, *, transcript, summary):
         def upsert_chunks(self, **_kwargs):
             return "vector-id"
 
+        def replace_chunks(self, **kwargs):
+            return self.upsert_chunks(**kwargs)
+
     monkeypatch.setattr(record_module, "ASRService", FakeAsr)
     monkeypatch.setattr(record_module, "EmbeddingService", FakeEmbedding)
     monkeypatch.setattr(record_module, "get_vector_client", FakeVectorClient)

@@ -1,3 +1,6 @@
+import asyncio
+import time
+
 import pytest
 from fastapi import HTTPException
 from minio.error import S3Error
@@ -198,3 +201,32 @@ async def test_media_returns_404_for_missing_object(monkeypatch):
         await media.get_media("records/voice_1.wav", None)
 
     assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_media_keeps_the_event_loop_running_while_storage_is_slow(monkeypatch):
+    """对象存储慢不能拖垮整站：uvicorn 只有一个事件循环，同步调用必须放线程里。"""
+
+    class _SlowMinIO(_FakeMinIOWithKeys):
+        def stat_object(self, bucket: str, object_name: str):
+            time.sleep(0.3)
+            return super().stat_object(bucket, object_name)
+
+    fake = _SlowMinIO({"records/voice_1.wav"})
+    monkeypatch.setattr(media, "get_minio_client", lambda: fake)
+
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    task = asyncio.create_task(ticker())
+    response = await media.get_media("records/voice_1.wav", None)
+    task.cancel()
+
+    assert response.status_code == 200
+    # 阻塞写法下这里必然是 0：挂钟走了 0.3s，循环却一个 tick 都没推进。
+    assert ticks >= 3

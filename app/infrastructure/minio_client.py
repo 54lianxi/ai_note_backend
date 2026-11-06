@@ -1,13 +1,46 @@
 """MinIO 对象存储客户端"""
 import io
 import json
+import logging
+import os
+from collections.abc import Iterable
 from pathlib import Path
 from uuid import uuid4
 
+import certifi
+import urllib3
 from minio import Minio
 from minio.error import S3Error
+from urllib3.util.retry import Retry
+from urllib3.util.timeout import Timeout
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+# MinIO SDK 自带的默认超时是 5 分钟，对象存储一挂就要占住连接这么久，所以自己接管。
+_CONNECT_TIMEOUT = 5.0
+# 单次 socket 读取上限；大文件分块上传时计时会重置，不影响慢速上传。
+_READ_TIMEOUT = 30.0
+
+
+def _build_http_client() -> urllib3.PoolManager:
+    """带超时的连接池。
+
+    read=False：请求体发到一半时不重传，否则几 M 的附件会被重复上传一次。
+    """
+    return urllib3.PoolManager(
+        timeout=Timeout(connect=_CONNECT_TIMEOUT, read=_READ_TIMEOUT),
+        maxsize=10,
+        cert_reqs="CERT_REQUIRED",
+        ca_certs=os.environ.get("SSL_CERT_FILE") or certifi.where(),
+        retries=Retry(
+            total=3,
+            backoff_factor=0.2,
+            status_forcelist=[500, 502, 503, 504],
+            read=False,
+        ),
+    )
 
 
 class MinIOClient:
@@ -19,6 +52,7 @@ class MinIOClient:
             access_key=settings.MINIO_ACCESS_KEY,
             secret_key=settings.MINIO_SECRET_KEY,
             secure=settings.MINIO_SECURE,
+            http_client=_build_http_client(),
         )
         self.bucket = settings.MINIO_BUCKET
         self._ensure_bucket()
@@ -113,6 +147,22 @@ class MinIOClient:
     def delete_file(self, object_name: str) -> None:
         """删除文件"""
         self.client.remove_object(self.bucket, object_name)
+
+    def delete_files_by_url(self, urls: Iterable[str | None]) -> None:
+        """按对象 URL 批量删除文件。
+
+        同步阻塞方法，async 调用方请用 asyncio.to_thread 包一层。单个失败只记
+        日志，不中断整批：清不掉的文件留给运维处理，不该卡住用户的删除请求。
+        """
+        for url in urls:
+            if not url:
+                continue
+            try:
+                object_name = object_name_from_url(self.bucket, url)
+                if object_name:
+                    self.delete_file(object_name)
+            except Exception:
+                logger.warning("删除记录文件失败: %s", url, exc_info=True)
 
     @staticmethod
     def _get_extension(content_type: str) -> str:

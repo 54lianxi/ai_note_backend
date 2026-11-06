@@ -122,3 +122,27 @@ def test_delete_record_removes_all_chunks_by_record_and_user():
     selector = calls[0]["points_selector"]
     assert isinstance(selector, FilterSelector)
     assert len(selector.filter.must) == 2
+
+
+def test_replace_chunks_deletes_old_points_before_upsert():
+    calls = []
+
+    class FakeQdrantClient:
+        def delete(self, **_kwargs):
+            calls.append("delete")
+
+        def upsert(self, **_kwargs):
+            calls.append("upsert")
+
+    vector_db = VectorDBClient.__new__(VectorDBClient)
+    vector_db.client = FakeQdrantClient()
+    vector_db.collection = "records"
+
+    result = vector_db.replace_chunks(
+        chunks=[{"text": "第一段", "vector": [0.1]}],
+        record_id="record-1",
+        user_id="user-1",
+    )
+
+    assert calls == ["delete", "upsert"]
+    assert result == "record-1"

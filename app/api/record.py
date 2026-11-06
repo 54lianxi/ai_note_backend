@@ -31,7 +31,7 @@ from app.core.i18n import LanguageDep, t
 from app.core.security import CurrentUserId
 from app.core.timeutil import ensure_utc, parse_utc
 from app.infrastructure.database import async_session_factory, get_db
-from app.infrastructure.minio_client import get_minio_client, object_name_from_url
+from app.infrastructure.minio_client import get_minio_client
 from app.infrastructure.vector_db import get_vector_client
 from app.models.record import Record
 from app.schemas.record import (
@@ -619,8 +619,8 @@ async def update_record(
     try:
         embedded = await embed_text_chunks(EmbeddingService(), record.content)
         vector_db = get_vector_client()
-        vector_db.delete_record(str(record.id), user_id)
-        record.vector_id = vector_db.upsert_chunks(
+        record.vector_id = await asyncio.to_thread(
+            vector_db.replace_chunks,
             chunks=embedded,
             record_id=str(record.id),
             user_id=user_id,
@@ -780,21 +780,18 @@ async def delete_record(
 
     if record.vector_id:
         try:
-            get_vector_client().delete_record(str(record.id), user_id)
+            vector_db = get_vector_client()
+            await asyncio.to_thread(
+                vector_db.delete_record, str(record.id), user_id
+            )
         except Exception:
             logger.warning("删除记录向量失败: %s", record.id, exc_info=True)
 
     # 先清对象存储：删库之后就再也定位不到这些文件了。失败只记日志，不阻塞删除。
     minio = get_minio_client()
-    for url in (record.image_url, record.file_url):
-        if not url:
-            continue
-        try:
-            object_name = object_name_from_url(minio.bucket, url)
-            if object_name:
-                minio.delete_file(object_name)
-        except Exception:
-            logger.warning("删除记录文件失败: %s", url, exc_info=True)
+    await asyncio.to_thread(
+        minio.delete_files_by_url, [record.image_url, record.file_url]
+    )
 
     await db.delete(record)
     return {"message": "已删除"}

@@ -43,9 +43,11 @@ class VectorDBClient:
                 timeout=30,
             )
         else:
+            # 本地容器分支同样要设超时：不写就是无限等，Qdrant 卡住会拖垮请求。
             self.client = QdrantClient(
                 host=settings.QDRANT_HOST,
                 port=settings.QDRANT_PORT,
+                timeout=30,
             )
         self.collection = settings.QDRANT_COLLECTION
         self._ensure_collection()
@@ -196,6 +198,24 @@ class VectorDBClient:
                     ]
                 )
             ),
+        )
+
+    def replace_chunks(
+        self,
+        chunks: list[dict],
+        record_id: str,
+        user_id: str,
+    ) -> str:
+        """先删旧分块再写新分块，即重新索引一条记录。
+
+        两次请求都得做完，中间失败会留下"旧向量已删、新向量没写"的空窗，
+        所以调用方把它们当一次整体操作看待，别拆开分别兜异常。
+        """
+        self.delete_record(record_id, user_id)
+        return self.upsert_chunks(
+            chunks=chunks,
+            record_id=record_id,
+            user_id=user_id,
         )
 
 

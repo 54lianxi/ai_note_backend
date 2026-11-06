@@ -1,4 +1,5 @@
 """LangGraph 检索工作流 - 语义检索并生成回答"""
+import asyncio
 import uuid
 from dataclasses import dataclass, field
 
@@ -51,7 +52,9 @@ async def embed_query_node(state: SearchState) -> dict:
 async def vector_search_node(state: SearchState) -> dict:
     """在向量数据库中检索"""
     vector_db = get_vector_client()
-    results = vector_db.search(
+    # Qdrant Cloud 走公网，同步请求放线程里，别占住唯一的事件循环。
+    results = await asyncio.to_thread(
+        vector_db.search,
         vector=state.query_vector,
         # 多取一些分块，避免同一篇长文档占满 top_k 后挤掉其它记录。
         top_k=state.top_k * 3,

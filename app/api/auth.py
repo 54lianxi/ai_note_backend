@@ -1,4 +1,5 @@
 """认证接口"""
+import asyncio
 import hashlib
 import logging
 import secrets
@@ -17,7 +18,7 @@ from app.config import settings
 from app.core.i18n import LanguageDep, t
 from app.core.security import CurrentUserId, create_access_token
 from app.infrastructure.database import get_db
-from app.infrastructure.minio_client import get_minio_client, object_name_from_url
+from app.infrastructure.minio_client import get_minio_client
 from app.infrastructure.vector_db import get_vector_client
 from app.models.conversation import Conversation, Message
 from app.models.record import Record
@@ -332,24 +333,35 @@ async def delete_account(
     ).scalars().all()
 
     # 先清外部存储：删库之后就再也定位不到这些文件了。失败只记日志，不阻塞注销。
-    minio = None
-    for record in records:
-        if record.vector_id:
-            try:
-                get_vector_client().delete_record(str(record.id), user_id)
-            except Exception:
-                logger.warning("注销账户删除向量失败: %s", record.vector_id, exc_info=True)
-        for url in (record.image_url, record.file_url):
-            if not url:
-                continue
-            try:
-                if minio is None:
-                    minio = get_minio_client()
-                object_name = object_name_from_url(minio.bucket, url)
-                if object_name:
-                    minio.delete_file(object_name)
-            except Exception:
-                logger.warning("注销账户删除文件失败: %s", url, exc_info=True)
+    # Qdrant 和 MinIO 都是同步网络请求，整批放线程里跑；账号多时有几百个点，
+    # 放在事件循环上会把整个服务卡住。先把要删的对象拍成普通元组，线程里
+    # 不再碰 ORM 实例。
+    external_files = [
+        (str(record.id), record.vector_id, record.image_url, record.file_url)
+        for record in records
+    ]
+
+    def _purge_external_data() -> None:
+        minio = None
+        for record_id, vector_id, image_url, file_url in external_files:
+            if vector_id:
+                try:
+                    get_vector_client().delete_record(record_id, user_id)
+                except Exception:
+                    logger.warning(
+                        "注销账户删除向量失败: %s", vector_id, exc_info=True
+                    )
+            if image_url or file_url:
+                try:
+                    if minio is None:
+                        minio = get_minio_client()
+                    minio.delete_files_by_url([image_url, file_url])
+                except Exception:
+                    logger.warning(
+                        "注销账户删除文件失败: %s", record_id, exc_info=True
+                    )
+
+    await asyncio.to_thread(_purge_external_data)
 
     # 按外键依赖顺序清理，最后删用户本身。
     conversation_ids = select(Conversation.id).where(Conversation.user_id == uid)

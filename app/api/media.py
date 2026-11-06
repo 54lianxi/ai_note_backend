@@ -4,6 +4,7 @@
 在手机上根本连不上，所以图片和音频统一从 API 域名转发出去。音频播放器拖动
 进度会发 Range 请求，这里一并支持。
 """
+import asyncio
 import logging
 import mimetypes
 from collections.abc import Iterator
@@ -89,6 +90,23 @@ def _stream(response) -> Iterator[bytes]:
         response.release_conn()
 
 
+def _stat_first_object(
+    minio, candidates: list[str]
+) -> tuple[object | None, str | None]:
+    """按候选顺序取第一个存在的对象，取不到返回 (None, None)。
+
+    历史数据 key 形态不统一，所以要逐个试；urllib3 是同步库，整个循环必须放在
+    线程里跑，否则一次对象存储抖动就把唯一的事件循环冻住、所有接口一起超时。
+    """
+    for candidate in candidates:
+        try:
+            stat = minio.client.stat_object(minio.bucket, candidate)
+        except S3Error:
+            continue
+        return stat, candidate
+    return None, None
+
+
 @router.get("/media/{path:path}")
 async def get_media(
     path: str,
@@ -97,15 +115,7 @@ async def get_media(
     """读取图片/音频对象。公开访问，和原来对象存储的只读策略一致。"""
     candidates = resolve_object_candidates(path)
     minio = get_minio_client()
-    stat = None
-    object_name = None
-    for candidate in candidates:
-        try:
-            stat = minio.client.stat_object(minio.bucket, candidate)
-            object_name = candidate
-            break
-        except S3Error:
-            continue
+    stat, object_name = await asyncio.to_thread(_stat_first_object, minio, candidates)
     if stat is None:
         logger.info("媒体对象不存在: %s (候选 %s)", path, candidates)
         raise HTTPException(status_code=404, detail="文件不存在")
@@ -123,13 +133,17 @@ async def get_media(
 
     selected = _parse_range(range_header, size)
     if selected is None:
-        response = minio.client.get_object(minio.bucket, object_name)
+        response = await asyncio.to_thread(minio.client.get_object, minio.bucket, object_name)
         headers["Content-Length"] = str(size)
         return StreamingResponse(_stream(response), headers=headers)
 
     start, end = selected
-    response = minio.client.get_object(
-        minio.bucket, object_name, offset=start, length=end - start + 1
+    response = await asyncio.to_thread(
+        minio.client.get_object,
+        minio.bucket,
+        object_name,
+        offset=start,
+        length=end - start + 1,
     )
     headers["Content-Range"] = f"bytes {start}-{end}/{size}"
     headers["Content-Length"] = str(end - start + 1)

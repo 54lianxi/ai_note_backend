@@ -1,5 +1,6 @@
 """FastAPI 应用入口"""
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,9 +14,19 @@ from app.api.record import run_stalled_transcription_reaper
 from app.api.router import api_router
 from app.config import settings
 from app.infrastructure.database import close_db, init_db
+from app.infrastructure.minio_client import get_minio_client
+from app.infrastructure.vector_db import get_vector_client
 
 # 静态页面目录（隐私政策等公开法律文本）。
 STATIC_DIR = Path(__file__).parent / "static"
+
+logger = logging.getLogger(__name__)
+
+
+def _warm_storage_clients() -> None:
+    """构造 Qdrant / MinIO 客户端单例，同步阻塞，由调用方放线程里执行。"""
+    get_vector_client()
+    get_minio_client()
 
 
 def _static_page(filename: str) -> FileResponse:
@@ -28,6 +39,12 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
     await init_db()
+    # Qdrant/MinIO 客户端首次构造要发建桶、建集合等远程请求，放在线程里预先做完，
+    # 免得重启后第一个用户请求替整个进程付这段阻塞时间。失败不致命，留到用时重试。
+    try:
+        await asyncio.to_thread(_warm_storage_clients)
+    except Exception:
+        logger.warning("外部存储预热失败，将在首次请求时重试", exc_info=True)
     # 后台转写跑在 API 进程内，进程重启就丢了；用定时巡检把失联任务收尾，
     # 免得用户永远看到「正在转写」。
     reaper = asyncio.create_task(run_stalled_transcription_reaper())

@@ -108,7 +108,8 @@ async def process_image_node(state: RecordState) -> dict:
     # 1. 上传图片到 MinIO
     try:
         minio = get_minio_client()
-        state.image_url = minio.upload_file(
+        state.image_url = await asyncio.to_thread(
+            minio.upload_file,
             state.file_data,
             state.content_type_header,
             filename=state.filename,
@@ -156,7 +157,8 @@ async def process_file_node(state: RecordState) -> dict:
     """上传附件并抽取正文，正文供详情展示和 AI 检索使用。"""
     try:
         minio = get_minio_client()
-        state.file_url = minio.upload_file(
+        state.file_url = await asyncio.to_thread(
+            minio.upload_file,
             state.file_data,
             state.content_type_header or "application/octet-stream",
             filename=state.filename,
@@ -245,7 +247,8 @@ async def store_node(state: RecordState) -> dict:
     if state.embedding_chunks:
         try:
             vector_db = get_vector_client()
-            vector_id = vector_db.upsert_chunks(
+            vector_id = await asyncio.to_thread(
+                vector_db.upsert_chunks,
                 chunks=state.embedding_chunks,
                 record_id=record_id,
                 user_id=state.user_id,
@@ -448,8 +451,8 @@ async def transcribe_voice_record(
         try:
             embedded = await embed_text_chunks(EmbeddingService(), text)
             vector_db = get_vector_client()
-            vector_db.delete_record(record_id, user_id)
-            vector_id = vector_db.upsert_chunks(
+            vector_id = await asyncio.to_thread(
+                vector_db.replace_chunks,
                 chunks=embedded,
                 record_id=record_id,
                 user_id=user_id,
