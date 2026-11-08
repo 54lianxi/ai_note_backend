@@ -2,6 +2,9 @@
 import asyncio
 import logging
 import os
+import shutil
+import tempfile
+import wave
 
 import httpx
 from openai import AsyncOpenAI
@@ -15,6 +18,12 @@ logger = logging.getLogger(__name__)
 # 分块上传的块大小和单次请求超时。长录音转写可能跑十几分钟，留够时间。
 _UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 _TRANSCRIBE_TIMEOUT = 1800.0
+
+# gemini-3.5-transcribe 单次请求最多接受 1 小时音频（未开说话人分离/时间戳时）。
+# 超过会被上游 4xx 拒绝，所以把长 WAV 按 55 分钟切段分别转写再拼接，
+# 留 5 分钟余量防元数据偏差。非 WAV 格式不做分段，保持原行为。
+_SEGMENT_SECONDS = 55 * 60
+_SEGMENT_READ_BYTES = 1024 * 1024
 
 # 音频后缀到 MIME 类型的映射，Files API 需要显式声明。
 _MIME_TYPES = {
@@ -73,6 +82,24 @@ class ASRService:
         :param filename: 原始文件名（用于判断 MIME 和展示）
         :return: 转写文本
         """
+        if self.provider == "gemini":
+            segments = await self._split_long_wav(path)
+            if segments:
+                try:
+                    texts = []
+                    for segment in segments:
+                        text = await self._transcribe_with_retry(segment, filename)
+                        if text:
+                            texts.append(text)
+                    return "\n".join(texts)
+                finally:
+                    await asyncio.to_thread(
+                        shutil.rmtree, os.path.dirname(segments[0]), True
+                    )
+        return await self._transcribe_with_retry(path, filename)
+
+    async def _transcribe_with_retry(self, path: str, filename: str) -> str:
+        """单条音频的转写（带指数退避重试）。长录音分段后逐段调用这里。"""
         attempts = settings.ASR_MAX_RETRIES + 1
         for attempt in range(attempts):
             try:
@@ -93,6 +120,70 @@ class ASRService:
                 await asyncio.sleep(delay)
 
         raise ASRServiceError("语音识别失败")
+
+    async def _split_long_wav(self, path: str) -> list[str]:
+        """把超过单次转写时长上限的 WAV 按 PCM 帧切成段。
+
+        返回分段文件路径列表；时长未超限、不是 WAV 或文件读不了时返回 []，
+        调用方回落到整文件转写。WAV 是裸 PCM，按帧对齐的字节切块即无损。
+        """
+        try:
+            info = await asyncio.to_thread(self._probe_wav, path)
+        except Exception:  # noqa: BLE001  # 非 WAV 或文件不可读，不分段
+            return []
+        if info is None:
+            return []
+        framerate, total_frames = info
+        duration = total_frames / framerate
+        if duration <= _SEGMENT_SECONDS:
+            return []
+        return await asyncio.to_thread(self._write_wav_segments, path, info)
+
+    @staticmethod
+    def _probe_wav(path: str) -> tuple[int, int] | None:
+        """读 WAV 参数，返回 (帧率, 总帧数)；非 WAV 返回 None。"""
+        with wave.open(path, "rb") as source:
+            framerate = source.getframerate()
+            total_frames = source.getnframes()
+        if framerate <= 0 or total_frames <= 0:
+            return None
+        return framerate, total_frames
+
+    @staticmethod
+    def _write_wav_segments(path: str, info: tuple[int, int]) -> list[str]:
+        """按帧对齐把 WAV 切成多个不超过单段时长上限的片段文件。"""
+        framerate, total_frames = info
+        with wave.open(path, "rb") as source:
+            params = source.getparams()
+            frames_per_segment = framerate * _SEGMENT_SECONDS
+            # 一次读 1MB 的帧，避免把整段读进内存
+            block_frames = max(
+                1, _SEGMENT_READ_BYTES // (params.sampwidth * params.nchannels)
+            )
+            segment_dir = tempfile.mkdtemp(prefix="asr-split-")
+            segments: list[str] = []
+            try:
+                remaining = total_frames
+                while remaining > 0:
+                    frames_this_segment = min(frames_per_segment, remaining)
+                    remaining -= frames_this_segment
+                    segment_path = f"{segment_dir}/segment-{len(segments):03d}.wav"
+                    segments.append(segment_path)
+                    with wave.open(segment_path, "wb") as writer:
+                        writer.setparams(params)
+                        frames_left = frames_this_segment
+                        while frames_left > 0:
+                            block = source.readframes(min(frames_left, block_frames))
+                            if not block:
+                                break
+                            writer.writeframes(block)
+                            frames_left -= (
+                                len(block) // (params.sampwidth * params.nchannels)
+                            )
+            except Exception:
+                shutil.rmtree(segment_dir, True)
+                raise
+        return segments
 
     async def _transcribe_openai_file(self, path: str, filename: str) -> str:
         """调用 OpenAI 兼容的 /audio/transcriptions（Groq、OpenAI、硅基流动都适用）。"""
