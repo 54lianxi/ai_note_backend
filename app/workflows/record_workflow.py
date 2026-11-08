@@ -77,6 +77,9 @@ async def process_voice_node(state: RecordState) -> dict:
 
     保存接口立即返回，后台用整段音频转写，避免长录音的实时转写结果
     不完整时被当成最终内容。
+    例外：短录音（live 会话上限内）的实时文本基本完整，直接落库为
+    done，省一次重复转写；长录音的实时文本只作预览落库，状态仍为
+    pending，后台转写完成后覆盖。
     """
     # 1. 保存原始音频，记录详情页可以回放（失败不影响记录本身）。
     # 从临时文件流式上传，长录音不占内存，也不阻塞事件循环。
@@ -92,9 +95,20 @@ async def process_voice_node(state: RecordState) -> dict:
         except Exception:
             logger.exception("语音上传对象存储失败，继续保存录音记录元数据")
 
-    state.content = ""
-    state.summary = ""
-    state.transcription_status = "pending"
+    preview = (state.content or "").strip()
+    if preview:
+        state.content = preview
+        state.summary = preview[:100] + "..." if len(preview) > 100 else preview
+        state.transcription_status = (
+            "done"
+            if state.audio_duration_seconds
+            <= settings.VOICE_LIVE_TRANSCRIPT_MAX_SECONDS
+            else "pending"
+        )
+    else:
+        state.content = ""
+        state.summary = ""
+        state.transcription_status = "pending"
     return {
         "content": state.content,
         "summary": state.summary,

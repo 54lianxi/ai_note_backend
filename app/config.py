@@ -140,6 +140,10 @@ class Settings(BaseSettings):
     TRANSCRIPTION_START_GRACE_SECONDS: int = Field(default=180, ge=30, le=3600)
     # 连续这么多个心跳周期没刷新，才认为执行任务的进程已经不在了。
     TRANSCRIPTION_HEARTBEAT_MISS_LIMIT: int = Field(default=6, ge=2, le=60)
+    # 实时转写文本的可信时长上限（秒）。live 会话单场上限 10 分钟，之内
+    # 实时文本基本不缺内容：保存时直接落库，跳过后台重转。超过则只把实时
+    # 文本当预览落库，后台转写完成后替换。
+    VOICE_LIVE_TRANSCRIPT_MAX_SECONDS: int = Field(default=10 * 60, ge=0)
     # 心跳失联任务的巡检间隔。
     TRANSCRIPTION_REAPER_INTERVAL_SECONDS: int = Field(default=60, ge=10, le=600)
 

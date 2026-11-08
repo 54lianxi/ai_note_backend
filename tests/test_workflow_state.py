@@ -114,8 +114,8 @@ async def test_process_voice_node_defers_transcription_without_text(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_process_voice_node_ignores_client_transcript(monkeypatch):
-    """语音保存不再信任客户端预览，统一由后台按整段音频转写。"""
+async def test_process_voice_node_uses_short_live_transcript(monkeypatch):
+    """live 会话上限内的短录音：实时文本直接落库为 done，跳过后台重转。"""
 
     class FailingAsrService:
         def __init__(self):
@@ -127,13 +127,38 @@ async def test_process_voice_node_ignores_client_transcript(monkeypatch):
         user_id="00000000-0000-0000-0000-000000000001",
         content_type="voice",
         content="  今天的会议记录  ",
+        audio_duration_seconds=300,
         language="zh",
     )
 
     result = await record_module.process_voice_node(state)
 
-    assert result["content"] == ""
-    assert result["summary"] == ""
+    assert result["content"] == "今天的会议记录"
+    assert result["summary"] == "今天的会议记录"
+    assert result["transcription_status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_process_voice_node_keeps_long_transcript_as_preview(monkeypatch):
+    """超 live 上限的长录音：实时文本只作预览落库，仍等后台重转替换。"""
+
+    class FailingAsrService:
+        def __init__(self):
+            raise AssertionError("保存流程不应该同步调用 ASR")
+
+    monkeypatch.setattr(record_module, "ASRService", FailingAsrService)
+
+    state = record_module.RecordState(
+        user_id="00000000-0000-0000-0000-000000000001",
+        content_type="voice",
+        content="  今天的会议记录  ",
+        audio_duration_seconds=2 * 60 * 60,
+        language="zh",
+    )
+
+    result = await record_module.process_voice_node(state)
+
+    assert result["content"] == "今天的会议记录"
     assert result["transcription_status"] == "pending"
 
 
