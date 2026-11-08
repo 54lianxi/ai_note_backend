@@ -131,7 +131,7 @@ class Settings(BaseSettings):
     ASR_MAX_RETRIES: int = Field(default=3, ge=0, le=5)
     ASR_RETRY_BASE_SECONDS: float = Field(default=2.0, ge=0, le=30)
     # 每条语音记录允许用户主动重新转写的总次数。
-    MANUAL_TRANSCRIPTION_LIMIT: int = Field(default=3, ge=1, le=20)
+    MANUAL_TRANSCRIPTION_LIMIT: int = Field(default=5, ge=1, le=20)
 
     # 后台转写的心跳与失联判定。长录音转写要跑十几到几十分钟，
     # 判断任务是否已经丢失只看心跳，不用固定超时时长去猜。
