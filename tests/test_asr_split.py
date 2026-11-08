@@ -46,7 +46,7 @@ async def test_long_wav_is_split_and_text_joined(monkeypatch, tmp_path):
     result = await service.transcribe_file(path, "long.wav")
 
     assert len(calls) == 3
-    assert result == "text-1\ntext-2\ntext-3"
+    assert result == "text-1\n\ntext-2\n\ntext-3"
     # 段文件和临时目录都要清掉
     assert not any(os.path.exists(p) for p in calls)
 

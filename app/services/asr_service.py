@@ -25,6 +25,14 @@ _TRANSCRIBE_TIMEOUT = 1800.0
 _SEGMENT_SECONDS = 55 * 60
 _SEGMENT_READ_BYTES = 1024 * 1024
 
+# 随音频一起发给转写模型的指令：逐字转写、按话题分段。前端按空行
+# 渲染段落，所以段落间用空行分隔。不要求任何额外输出。
+_TRANSCRIBE_PROMPT = (
+    "Transcribe the audio verbatim in the language it is spoken. "
+    "Group the transcript into natural paragraphs at topic changes, "
+    "separated by a blank line. Output only the transcript text."
+)
+
 # 音频后缀到 MIME 类型的映射，Files API 需要显式声明。
 _MIME_TYPES = {
     ".wav": "audio/wav",
@@ -90,8 +98,9 @@ class ASRService:
                     for segment in segments:
                         text = await self._transcribe_with_retry(segment, filename)
                         if text:
-                            texts.append(text)
-                    return "\n".join(texts)
+                            texts.append(text.strip())
+                    # 每段独立成段：空行分隔，前端按空行渲染段落。
+                    return "\n\n".join(texts)
                 finally:
                     await asyncio.to_thread(
                         shutil.rmtree, os.path.dirname(segments[0]), True
@@ -311,10 +320,14 @@ class ASRService:
                         "model": self.model,
                         "input": [
                             {
+                                "type": "text",
+                                "text": _TRANSCRIBE_PROMPT,
+                            },
+                            {
                                 "type": "audio",
                                 "uri": file_uri,
                                 "mime_type": mime_type,
-                            }
+                            },
                         ],
                         "generation_config": {
                             "transcription_config": {
