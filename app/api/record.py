@@ -141,6 +141,15 @@ def _model_service_error(error: Exception, language: str | None) -> HTTPExceptio
     )
 
 
+def _embedding_text(title: str | None, content: str) -> str:
+    """向量化文本：自定义标题拼在正文前，让标题也参与语义检索。"""
+    clean_title = (title or "").strip()
+    clean_content = (content or "").strip()
+    if clean_title:
+        return f"{clean_title}\n\n{clean_content}"
+    return clean_content
+
+
 def _record_response(
     record: Record, message: str | None = None, language: str | None = None
 ) -> RecordResponse:
@@ -596,7 +605,7 @@ async def update_record(
     if record is None:
         raise HTTPException(status_code=404, detail=t(language, "record_not_found"))
 
-    # 标题编辑只改标题：内容、摘要、向量都保持原样。
+    # 标题编辑不改内容与摘要；标题参与检索，向量在下方按需重建。
     if data.title is not None:
         record.title = data.title.strip() or None
 
@@ -623,9 +632,14 @@ async def update_record(
     # 统一按 UTC 存储，交给前端按本地时区展示。
     record.updated_at = datetime.now(UTC)
 
-    if data.content is not None:
+    # 标题参与语义检索：标题或内容任一变更都重建向量，向量文本为
+    # 「标题 + 正文」拼接。仅改标题时内容不变，但向量仍需刷新。
+    if data.title is not None or data.content is not None:
         try:
-            embedded = await embed_text_chunks(EmbeddingService(), record.content)
+            embedded = await embed_text_chunks(
+                EmbeddingService(),
+                _embedding_text(record.title, record.content),
+            )
             vector_db = get_vector_client()
             record.vector_id = await asyncio.to_thread(
                 vector_db.replace_chunks,
