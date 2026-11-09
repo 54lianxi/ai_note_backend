@@ -22,6 +22,8 @@ class Record(Base):
         UUID(as_uuid=True), ForeignKey("users.id"), index=True
     )
     content: Mapped[str] = mapped_column(Text)  # 原始文本内容
+    # 用户自定义标题；为空时前端回落到内容/摘要展示。
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     summary: Mapped[str | None] = mapped_column(String(500), nullable=True)  # 摘要
     content_type: Mapped[str] = mapped_column(String(20))  # text/voice/image
     image_url: Mapped[str | None] = mapped_column(

@@ -149,6 +149,7 @@ def _record_response(
     return RecordResponse(
         record_id=record.id,
         message=message,
+        title=record.title,
         content=record.content,
         summary=record.summary,
         content_type=record.content_type,
@@ -300,6 +301,7 @@ def _workflow_response(result, language: str | None = None) -> RecordResponse:
     return RecordResponse(
         record_id=uuid.UUID(result.record_id),
         message=message,
+        title=None,
         content=result.content,
         summary=result.summary,
         content_type=result.content_type,
@@ -594,38 +596,45 @@ async def update_record(
     if record is None:
         raise HTTPException(status_code=404, detail=t(language, "record_not_found"))
 
-    record.content = data.content.strip()
-    if data.summary is not None and data.summary.strip():
-        record.summary = data.summary.strip()
-    elif record.content_type == "voice":
-        try:
-            record.summary = await LLMService().summarize_record(
-                record.content,
-                language,
+    # 标题编辑只改标题：内容、摘要、向量都保持原样。
+    if data.title is not None:
+        record.title = data.title.strip() or None
+
+    # 内容编辑才重算摘要并刷新向量；仅改标题时跳过这些开销。
+    if data.content is not None:
+        record.content = data.content.strip()
+        if data.summary is not None and data.summary.strip():
+            record.summary = data.summary.strip()
+        elif record.content_type == "voice":
+            try:
+                record.summary = await LLMService().summarize_record(
+                    record.content,
+                    language,
+                )
+            except Exception:
+                logger.warning("编辑语音后重新生成摘要失败: %s", record.id, exc_info=True)
+                record.summary = (
+                    record.content[:100] + "..." if len(record.content) > 100 else None
+                )
+        else:
+            record.summary = record.content[:100] + (
+                "..." if len(record.content) > 100 else ""
             )
-        except Exception:
-            logger.warning("编辑语音后重新生成摘要失败: %s", record.id, exc_info=True)
-            record.summary = (
-                record.content[:100] + "..." if len(record.content) > 100 else None
-            )
-    else:
-        record.summary = record.content[:100] + (
-            "..." if len(record.content) > 100 else ""
-        )
     # 统一按 UTC 存储，交给前端按本地时区展示。
     record.updated_at = datetime.now(UTC)
 
-    try:
-        embedded = await embed_text_chunks(EmbeddingService(), record.content)
-        vector_db = get_vector_client()
-        record.vector_id = await asyncio.to_thread(
-            vector_db.replace_chunks,
-            chunks=embedded,
-            record_id=str(record.id),
-            user_id=user_id,
-        )
-    except Exception:
-        logger.warning("编辑记录后刷新向量失败: %s", record.id, exc_info=True)
+    if data.content is not None:
+        try:
+            embedded = await embed_text_chunks(EmbeddingService(), record.content)
+            vector_db = get_vector_client()
+            record.vector_id = await asyncio.to_thread(
+                vector_db.replace_chunks,
+                chunks=embedded,
+                record_id=str(record.id),
+                user_id=user_id,
+            )
+        except Exception:
+            logger.warning("编辑记录后刷新向量失败: %s", record.id, exc_info=True)
 
     await db.flush()
     return _record_response(record, language=language)

@@ -145,6 +145,10 @@ async def init_db():
                 "transcription_error VARCHAR(40)"
             )
         )
+        # 用户自定义标题；历史行为空，前端回落到内容展示。
+        await conn.execute(
+            text("ALTER TABLE records ADD COLUMN IF NOT EXISTS title VARCHAR(200)")
+        )
         # 统一时间存储：历史列是 TIMESTAMP（无时区），按 UTC 解释后转成 TIMESTAMPTZ。
         # 只处理当前仍为 naive 的列，避免重复转换造成时区偏移。
         legacy_columns = (

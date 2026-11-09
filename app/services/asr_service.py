@@ -25,6 +25,10 @@ _TRANSCRIBE_TIMEOUT = 1800.0
 _SEGMENT_SECONDS = 55 * 60
 _SEGMENT_READ_BYTES = 1024 * 1024
 
+# 段落兜底：转写文本超过这个长度且模型没分段时，按句子标点切段落。
+_MIN_PARAGRAPH_TEXT = 800
+_TARGET_PARAGRAPH_CHARS = 600
+
 # 随音频一起发给转写模型的指令：逐字转写、按话题分段。前端按空行
 # 渲染段落，所以段落间用空行分隔。不要求任何额外输出。
 _TRANSCRIBE_PROMPT = (
@@ -389,7 +393,30 @@ class ASRService:
             return "".join(parts).strip()
 
         error = (body.get("error") or {}).get("message") if body.get("error") else None
-        raise ASRServiceError(f"语音识别失败: {error or body}")
+        if error or not parts:
+            raise ASRServiceError(f"语音识别失败: {error or body}")
+        return ASRService._ensure_paragraphs("".join(parts).strip())
+
+    @staticmethod
+    def _ensure_paragraphs(text: str) -> str:
+        """模型没输出段落时，按句子标点兜底插入段落断行。
+
+        长音频下模型经常无视分段指令，返回一整块文本；这里在句子结束
+        标点处（每约 600 字符）插入空行，保证详情页的段落渲染。已有
+        段落（含空行）或文本较短时不做处理。
+        """
+        if "\n\n" in text or len(text) <= _MIN_PARAGRAPH_TEXT:
+            return text
+        breakers = {".", "。", "!", "！", "?", "？"}
+        out: list[str] = []
+        since_break = 0
+        for char in text:
+            out.append(char)
+            since_break += 1
+            if char in breakers and since_break >= _TARGET_PARAGRAPH_CHARS:
+                out.append("\n\n")
+                since_break = 0
+        return "".join(out)
 
     @staticmethod
     def _guess_mime_type(filename: str) -> str:

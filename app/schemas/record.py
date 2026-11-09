@@ -16,6 +16,7 @@ class RecordResponse(BaseModel):
     """记录响应"""
     record_id: uuid.UUID
     message: str = "记录成功"
+    title: str | None = None
     content: str | None = None
     summary: str | None = None
     content_type: str
@@ -37,9 +38,14 @@ class RecordResponse(BaseModel):
 
 
 class RecordUpdate(BaseModel):
-    """编辑记录请求"""
-    content: str = Field(..., min_length=1, max_length=10000)
+    """编辑记录请求
+
+    content 与 title 都可省略：列表里改标题只带 title，不带 content 时
+    不会触发摘要/向量的重算。
+    """
+    content: str | None = Field(default=None, min_length=1, max_length=10000)
     summary: str | None = Field(default=None, max_length=500)
+    title: str | None = Field(default=None, max_length=200)
 
 
 class RecordListResponse(BaseModel):

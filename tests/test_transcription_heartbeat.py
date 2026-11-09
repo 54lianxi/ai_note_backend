@@ -31,6 +31,7 @@ class FakeRow:
         self.id = uuid.uuid4()
         self.user_id = uuid.uuid4()
         self.content = ""
+        self.title = None
         self.summary = None
         self.content_type = "voice"
         self.image_url = None
