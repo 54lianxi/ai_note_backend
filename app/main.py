@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 # 导入所有 ORM 模型，确保 create_all 能发现全部表
 import app.models
@@ -79,6 +80,16 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(api_router, prefix=settings.API_PREFIX)
+
+# 本地文件夹存储的公开静态路由：仅附件记录（records/file）走这里，
+# 语音/图片仍走 MinIO。目录在挂载时确保存在。
+_STATIC_FILES_DIR = Path(settings.STATIC_FILES_DIR)
+_STATIC_FILES_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(
+    settings.STATIC_FILES_URL_PREFIX,
+    StaticFiles(directory=_STATIC_FILES_DIR),
+    name="static_files",
+)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])

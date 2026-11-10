@@ -15,6 +15,7 @@ from sqlalchemy import update
 from app.config import settings
 from app.core.i18n import t
 from app.infrastructure.database import async_session_factory
+from app.infrastructure.local_storage import save_bytes
 from app.infrastructure.minio_client import get_minio_client
 from app.infrastructure.vector_db import get_vector_client
 from app.models.record import Record
@@ -168,17 +169,16 @@ async def process_image_node(state: RecordState) -> dict:
 
 
 async def process_file_node(state: RecordState) -> dict:
-    """上传附件并抽取正文，正文供详情展示和 AI 检索使用。"""
+    """附件写入本地文件夹并抽取正文，正文供详情展示和 AI 检索使用。"""
     try:
-        minio = get_minio_client()
         state.file_url = await asyncio.to_thread(
-            minio.upload_file,
-            state.file_data,
+            save_bytes,
+            state.file_data or b"",
             state.content_type_header or "application/octet-stream",
-            filename=state.filename,
+            state.filename,
         )
     except Exception:
-        logger.exception("附件上传对象存储失败，继续保存附件元数据")
+        logger.exception("附件写入本地存储失败，继续保存附件元数据")
 
     filename = state.filename.strip() or "未命名附件"
     try:

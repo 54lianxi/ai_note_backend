@@ -31,6 +31,9 @@ from app.core.i18n import LanguageDep, t
 from app.core.security import CurrentUserId
 from app.core.timeutil import ensure_utc, parse_utc
 from app.infrastructure.database import async_session_factory, get_db
+from app.infrastructure.local_storage import (
+    delete_files_by_urls as delete_local_files_by_urls,
+)
 from app.infrastructure.minio_client import get_minio_client
 from app.infrastructure.vector_db import get_vector_client
 from app.models.record import Record
@@ -810,6 +813,13 @@ async def delete_record(
             logger.warning("删除记录向量失败: %s", record.id, exc_info=True)
 
     # 先清对象存储：删库之后就再也定位不到这些文件了。失败只记日志，不阻塞删除。
+    # 附件记录（/static/files/ 前缀）存在本地文件夹，语音/图片仍走 MinIO，两边都清。
+    try:
+        await asyncio.to_thread(
+            delete_local_files_by_urls, [record.image_url, record.file_url]
+        )
+    except Exception:
+        logger.warning("删除记录本地附件失败: %s", record.id, exc_info=True)
     minio = get_minio_client()
     await asyncio.to_thread(
         minio.delete_files_by_url, [record.image_url, record.file_url]

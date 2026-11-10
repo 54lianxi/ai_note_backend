@@ -18,6 +18,9 @@ from app.config import settings
 from app.core.i18n import LanguageDep, t
 from app.core.security import CurrentUserId, create_access_token
 from app.infrastructure.database import get_db
+from app.infrastructure.local_storage import (
+    delete_files_by_urls as delete_local_files_by_urls,
+)
 from app.infrastructure.minio_client import get_minio_client
 from app.infrastructure.vector_db import get_vector_client
 from app.models.conversation import Conversation, Message
@@ -351,6 +354,13 @@ async def delete_account(
                     logger.warning(
                         "注销账户删除向量失败: %s", vector_id, exc_info=True
                     )
+            # 本地文件夹存的附件（/static/files/ 前缀）单独删；旧 MinIO 记录走原逻辑。
+            try:
+                delete_local_files_by_urls([image_url, file_url])
+            except Exception:
+                logger.warning(
+                    "注销账户删除本地附件失败: %s", record_id, exc_info=True
+                )
             if image_url or file_url:
                 try:
                     if minio is None:

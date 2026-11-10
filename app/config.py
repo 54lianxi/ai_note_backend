@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     MINIO_BUCKET: str = Field(default="records")
     MINIO_SECURE: bool = False
 
+    # 本地文件夹存储：图片/附件/录音等静态文件直接落盘，公开 URL 前缀见
+    # STATIC_FILES_URL_PREFIX（由 main.py 挂到静态路由）。留空目录名则回退 MinIO。
+    STATIC_FILES_DIR: str = Field(
+        default=str(Path(__file__).resolve().parent / "static" / "files")
+    )
+    STATIC_FILES_URL_PREFIX: str = Field(default="/static/files")
+
     # Qdrant 向量数据库配置
     # 填了 QDRANT_URL 就用远程（Qdrant Cloud），否则用下面的 host/port 连本地。
     QDRANT_URL: str = Field(default="")
