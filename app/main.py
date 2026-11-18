@@ -17,6 +17,7 @@ from app.config import settings
 from app.infrastructure.database import close_db, init_db
 from app.infrastructure.minio_client import get_minio_client
 from app.infrastructure.vector_db import get_vector_client
+from app.services import news_service
 
 # 静态页面目录（隐私政策等公开法律文本）。
 STATIC_DIR = Path(__file__).parent / "static"
@@ -49,11 +50,18 @@ async def lifespan(app: FastAPI):
     # 后台转写跑在 API 进程内，进程重启就丢了；用定时巡检把失联任务收尾，
     # 免得用户永远看到「正在转写」。
     reaper = asyncio.create_task(run_stalled_transcription_reaper())
+    # 每日新闻定时任务：抓新闻 → LLM 总结 → 存笔记，可通过 NEWS_ENABLED 关闭。
+    news_task: asyncio.Task | None = None
+    if settings.NEWS_ENABLED:
+        news_task = asyncio.create_task(news_service.run_daily_news_scheduler())
     try:
         yield
     finally:
         reaper.cancel()
         await asyncio.gather(reaper, return_exceptions=True)
+        if news_task is not None:
+            news_task.cancel()
+            await asyncio.gather(news_task, return_exceptions=True)
         # 关闭时
         await close_db()
 

@@ -74,6 +74,20 @@ class Settings(BaseSettings):
     MINIO_BUCKET: str = Field(default="records")
     MINIO_SECURE: bool = False
 
+    # 每日新闻定时任务：每天 NEWS_HOUR（NEWS_TZ 时区）抓一条新闻存为笔记。
+    # 目标用户留空时写入审核账号。
+    NEWS_ENABLED: bool = Field(default=True)
+    NEWS_HOUR: int = Field(default=8, ge=0, le=23)
+    NEWS_TZ: str = Field(default="Asia/Shanghai")
+    NEWS_TARGET_USER_ID: str = Field(default="")
+
+    # 邮件发送（QQ邮箱需在 设置→账户 里开启 SMTP 并生成授权码）。
+    SMTP_HOST: str = Field(default="smtp.qq.com")
+    SMTP_PORT: int = Field(default=465, gt=0)
+    SMTP_USER: str = Field(default="")  # 发件邮箱，如 1399694975@qq.com
+    SMTP_PASSWORD: str = Field(default="")  # SMTP 授权码，不是邮箱登录密码
+    NEWS_EMAIL_TO: str = Field(default="1399694975@qq.com")
+
     # 本地文件夹存储：图片/附件/录音等静态文件直接落盘，公开 URL 前缀见
     # STATIC_FILES_URL_PREFIX（由 main.py 挂到静态路由）。留空目录名则回退 MinIO。
     STATIC_FILES_DIR: str = Field(
