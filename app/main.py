@@ -86,8 +86,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 注册路由
+# 注册路由：主前缀带项目标识（/ainote/v1），旧前缀（/api/v1）继续挂载，
+# 兼容已安装的历史版本客户端，两个前缀指向同一组接口。
 app.include_router(api_router, prefix=settings.API_PREFIX)
+app.include_router(api_router, prefix=settings.LEGACY_API_PREFIX)
 
 # 本地文件夹存储的公开静态路由：仅附件记录（records/file）走这里，
 # 语音/图片仍走 MinIO。目录在挂载时确保存在。

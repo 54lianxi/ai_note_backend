@@ -37,7 +37,10 @@ class Settings(BaseSettings):
     APP_NAME: str = "AI-Record"
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
-    API_PREFIX: str = "/api/v1"
+    # 项目标识前缀：所有接口路径都带 /ainote（如 /ainote/v1/records）。
+    API_PREFIX: str = "/ainote/v1"
+    # 旧客户端兼容前缀：已安装的历史版本仍走 /api/v1，与新版同时挂载。
+    LEGACY_API_PREFIX: str = "/api/v1"
     # 移动端不依赖 CORS；公开网页只需要正式站点来源。
     CORS_ORIGINS: str = "https://kuliqi.us"
 
