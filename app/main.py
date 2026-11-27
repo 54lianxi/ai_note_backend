@@ -2,9 +2,10 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -14,6 +15,7 @@ import app.models
 from app.api.record import run_stalled_transcription_reaper
 from app.api.router import api_router
 from app.config import settings
+from app.core.security import create_access_token, decode_access_token
 from app.infrastructure.database import close_db, init_db
 from app.infrastructure.minio_client import get_minio_client
 from app.infrastructure.vector_db import get_vector_client
@@ -90,6 +92,32 @@ app.add_middleware(
 # 兼容已安装的历史版本客户端，两个前缀指向同一组接口。
 app.include_router(api_router, prefix=settings.API_PREFIX)
 app.include_router(api_router, prefix=settings.LEGACY_API_PREFIX)
+
+
+@app.middleware("http")
+async def renew_access_token_middleware(request: Request, call_next):
+    """登录滑动续期：token �活超过一半有效期时，在响应头返回新 token。
+
+    客户端读到 X-New-Token 后替换本地存储即可实现无感续期；
+    登录类接口本身就在签发新 token，跳过。
+    """
+    response = await call_next(request)
+    auth_header = request.headers.get("authorization", "")
+    if (
+        auth_header.startswith("Bearer ")
+        and request.url.path.startswith(settings.API_PREFIX)
+        and not request.url.path.startswith(f"{settings.API_PREFIX}/auth/")
+    ):
+        payload = decode_access_token(auth_header[7:])
+        lifetime = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        if payload and payload.get("sub") and payload.get("exp"):
+            issued_at = float(payload["exp"]) - lifetime
+            elapsed = datetime.now(UTC).timestamp() - issued_at
+            if elapsed >= lifetime / 2:
+                response.headers["X-New-Token"] = create_access_token(
+                    {"sub": payload["sub"]}
+                )
+    return response
 
 # 本地文件夹存储的公开静态路由：仅附件记录（records/file）走这里，
 # 语音/图片仍走 MinIO。目录在挂载时确保存在。

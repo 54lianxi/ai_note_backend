@@ -153,6 +153,16 @@ def _embedding_text(title: str | None, content: str) -> str:
     return clean_content
 
 
+_LIST_PREVIEW_LIMIT = 300
+
+
+def _truncate_for_list(text: str | None) -> str | None:
+    """列表场景只保留内容预览，避免大笔记把整个列表响应撑爆。"""
+    if text is None or len(text) <= _LIST_PREVIEW_LIMIT:
+        return text
+    return text[:_LIST_PREVIEW_LIMIT] + "…"
+
+
 def _record_response(
     record: Record, message: str | None = None, language: str | None = None
 ) -> RecordResponse:
@@ -563,8 +573,17 @@ async def list_records(
         .limit(min(limit, 100))
     )
     records = list(result.scalars().all())
+    # 列表只做预览：content/summary 截断、丢弃图片识别详情，
+    # 避免单条大笔记把整页响应撑到几百 KB（移动端容易超时）。
+    items = []
+    for record in records:
+        item = _record_response(record)
+        item.content = _truncate_for_list(item.content)
+        item.summary = _truncate_for_list(item.summary)
+        item.image_key_info = None
+        items.append(item)
     return RecordListResponse(
-        records=[_record_response(record) for record in records],
+        records=items,
         total=count,
     )
 
